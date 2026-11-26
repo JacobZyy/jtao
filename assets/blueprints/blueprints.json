@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "roles": {
+    "planner": {
+      "responsibility": "Clarify scope, risks, dependencies, and execution order before code changes.",
+      "ownership": "Plans, scope boundaries, and work breakdown.",
+      "canEditFiles": false,
+      "ownedPathPrefixes": []
+    },
+    "implementer": {
+      "responsibility": "Own code changes inside the agreed file scope and produce verifiable receipts.",
+      "ownership": "Production code, tests, and local verification for explicitly assigned owned files.",
+      "canEditFiles": true,
+      "ownedPathPrefixes": ["cmd/", "internal/", "src/", "scripts/", "docs/"]
+    },
+    "reviewer": {
+      "responsibility": "Review correctness, regressions, maintainability, and test coverage.",
+      "ownership": "Findings only; does not own source edits.",
+      "canEditFiles": false,
+      "ownedPathPrefixes": []
+    },
+    "security-reviewer": {
+      "responsibility": "Review auth, data handling, secrets, injection risks, and unsafe automation.",
+      "ownership": "Security findings only; does not own source edits.",
+      "canEditFiles": false,
+      "ownedPathPrefixes": []
+    }
+  },
+  "blueprints": {
+    "single": {
+      "description": "Single-node implementation task with optional verification receipt.",
+      "phases": [
+        { "id": "implement", "role": "implementer", "mode": "sequential" }
+      ]
+    },
+    "feature": {
+      "description": "Plan implementation first, then execute, then review quality and security in parallel.",
+      "phases": [
+        { "id": "plan", "role": "planner", "mode": "sequential" },
+        { "id": "implement", "role": "implementer", "mode": "sequential" },
+        { "id": "review", "role": "reviewer", "mode": "parallel", "group": "final-checks" },
+        { "id": "security", "role": "security-reviewer", "mode": "parallel", "group": "final-checks" }
+      ]
+    },
+    "bugfix": {
+      "description": "Reproduce and scope the bug first, implement the fix, then review correctness.",
+      "phases": [
+        { "id": "plan", "role": "planner", "mode": "sequential" },
+        { "id": "implement", "role": "implementer", "mode": "sequential" },
+        { "id": "review", "role": "reviewer", "mode": "parallel", "group": "final-checks" }
+      ]
+    },
+    "refactor": {
+      "description": "Plan safe refactor boundaries, implement small changes, then review design and regressions.",
+      "phases": [
+        { "id": "plan", "role": "planner", "mode": "sequential" },
+        { "id": "implement", "role": "implementer", "mode": "sequential" },
+        { "id": "review", "role": "reviewer", "mode": "parallel", "group": "final-checks" }
+      ]
+    },
+    "security": {
+      "description": "Lead with security assessment, scope required changes, then implement and re-review.",
+      "phases": [
+        { "id": "security-assessment", "role": "security-reviewer", "mode": "sequential" },
+        { "id": "plan", "role": "planner", "mode": "sequential" },
+        { "id": "implement", "role": "implementer", "mode": "sequential" },
+        { "id": "review", "role": "reviewer", "mode": "parallel", "group": "final-checks" }
+      ]
+    }
+  }
+}

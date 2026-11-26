@@ -1,0 +1,138 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Rex 任务图与 Agent 长任务闭环",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "docs/architecture/aios-harness-flow/aios-harness-flow.html",
+    "legend": { "mode": "hidden" },
+    "repository": {
+      "url": "https://github.com/rexleimo/rex-harness.git",
+      "revision": "f143b9f6bb53461cf6f7fe1e3fb05a5568d6cfa3"
+    }
+  },
+  "lanes": [
+    { "id": "intake", "label": "任务起点" },
+    { "id": "execution", "label": "执行一轮" },
+    { "id": "continuation", "label": "接入方保存与接续" },
+    { "id": "exit", "label": "结束本次运行" }
+  ],
+  "mainPath": ["initialize", "dispatch", "agent", "verify", "persist"],
+  "semanticChecks": {
+    "allowedRoots": ["initialize", "resume"],
+    "allowedTerminals": ["completed", "paused"],
+    "requiredEdges": [
+      { "from": "decide", "to": "dispatch" },
+      { "from": "resume", "to": "decide" },
+      { "from": "persist", "to": "decide" }
+    ],
+    "requiredPaths": [
+      { "from": "agent", "to": "completed" },
+      { "from": "agent", "to": "paused" }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "initialize", "lane": "intake", "col": 1, "type": "backend",
+      "label": "建图并保存起点", "sublabel": "依赖、验收命令、通过的基线",
+      "sources": [
+        { "path": "src/domain/long-running-delivery.mjs", "line": 60, "end_line": 90, "label": "检查任务依赖" },
+        { "path": "src/domain/long-running-delivery.mjs", "line": 93, "end_line": 141, "label": "验收契约与基线" },
+        { "path": "src/domain/long-running-delivery.mjs", "line": 144, "end_line": 183, "label": "生成初始任务状态" }
+      ]
+    },
+    {
+      "id": "dispatch", "lane": "execution", "col": 1, "type": "messagebus",
+      "label": "宿主派发一轮", "sublabel": "只交给 Agent 当前节点",
+      "sources": [
+        { "path": "src/domain/long-running-delivery.mjs", "line": 144, "end_line": 183, "label": "Rex 选定唯一当前节点" }
+      ]
+    },
+    {
+      "id": "agent", "lane": "execution", "col": 2, "type": "external",
+      "label": "Codex 执行当前节点", "sublabel": "改代码并运行指定验证",
+      "sources": [
+        { "path": "src/domain/long-running-delivery.mjs", "line": 93, "end_line": 119, "label": "每个节点的验收场景" },
+        { "path": "src/standalone/store.mjs", "line": 200, "end_line": 240, "label": "实跑命令并记录回执" }
+      ]
+    },
+    {
+      "id": "verify", "lane": "execution", "col": 3, "type": "security",
+      "label": "Rex 验收并决定下一步", "sublabel": "前置节点验收后放行后续",
+      "sources": [
+        { "path": "src/domain/long-running-delivery.mjs", "line": 223, "end_line": 237, "label": "解析并核对回执" },
+        { "path": "src/domain/long-running-delivery.mjs", "line": 267, "end_line": 305, "label": "证据、重试与人工门" },
+        { "path": "src/domain/long-running-delivery.mjs", "line": 307, "end_line": 345, "label": "选下一个依赖已满足的任务" }
+      ]
+    },
+    {
+      "id": "resume", "lane": "continuation", "col": 0, "type": "external",
+      "label": "中断后按 ID 恢复", "sublabel": "读取保存的进度和决定",
+      "sources": [
+        { "path": "src/domain/long-running-delivery.mjs", "line": 262, "end_line": 271, "label": "推进以持久状态为输入" }
+      ]
+    },
+    {
+      "id": "decide", "lane": "continuation", "col": 1, "type": "messagebus",
+      "label": "宿主按决定接续", "sublabel": "可执行时自动启动下一轮",
+      "sources": [
+        { "path": "src/domain/long-running-delivery.mjs", "line": 267, "end_line": 305, "label": "阻塞、人工处理与重试" },
+        { "path": "src/domain/long-running-delivery.mjs", "line": 329, "end_line": 344, "label": "继续、完成与依赖阻塞" }
+      ]
+    },
+    {
+      "id": "persist", "lane": "continuation", "col": 3, "type": "database",
+      "label": "保存任务进度", "sublabel": "节点状态、回执引用、下一步",
+      "sources": [
+        { "path": "src/domain/long-running-delivery.mjs", "line": 144, "end_line": 148, "label": "宿主保存任务状态" },
+        { "path": "src/domain/long-running-delivery.mjs", "line": 307, "end_line": 345, "label": "返回新状态及下一步决定" }
+      ]
+    },
+    {
+      "id": "completed", "lane": "exit", "col": 0, "type": "backend",
+      "label": "完成目标", "sublabel": "所有任务节点已验收",
+      "icon": "success",
+      "sources": [
+        { "path": "src/domain/long-running-delivery.mjs", "line": 313, "end_line": 345, "label": "最后一个节点验收才完成" }
+      ]
+    },
+    {
+      "id": "paused", "lane": "exit", "col": 1, "type": "security",
+      "label": "暂停并交接", "sublabel": "缺证据、需人工或重试用完",
+      "icon": "waiting",
+      "sources": [
+        { "path": "src/domain/long-running-delivery.mjs", "line": 267, "end_line": 305, "label": "拒绝推进或转人工" }
+      ]
+    }
+  ],
+  "edges": [
+    { "id": "init-dispatch", "from": "initialize", "to": "dispatch", "label": "首个节点", "variant": "emphasis" },
+    { "id": "dispatch-agent", "from": "dispatch", "to": "agent", "label": "目标与验收", "variant": "emphasis" },
+    { "id": "agent-verify", "from": "agent", "to": "verify", "label": "验证回执", "variant": "emphasis" },
+    { "id": "verify-persist", "from": "verify", "to": "persist", "label": "新状态与决定", "variant": "emphasis" },
+    { "id": "persist-decide", "from": "persist", "to": "decide", "label": "保存后接续", "variant": "emphasis" },
+    { "id": "resume-decide", "from": "resume", "to": "decide", "label": "上次决定", "variant": "dashed" },
+    { "id": "decide-dispatch", "from": "decide", "to": "dispatch", "label": "继续 / 重试", "variant": "emphasis", "role": "return", "fromSide": "top", "toSide": "bottom", "route": "straight" },
+    { "id": "decide-complete", "from": "decide", "to": "completed", "label": "全部通过", "variant": "emphasis", "role": "branch" },
+    { "id": "decide-pause", "from": "decide", "to": "paused", "label": "阻塞 / 人工", "variant": "security", "role": "branch" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "任务图与循环",
+      "items": [
+        "任务依赖保持无环。回箭头属于宿主的调度循环，可以重试当前节点，也可以派发下一节点。",
+        "例如结账校验是回执页的前置任务。校验通过后才派发回执页。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "AIOS 当前接线",
+      "items": [
+        "图展示 Rex 长任务接口与宿主接入。AIOS 的适配器每次执行一轮，跨轮驱动由接入方提供。",
+        "aios harness run 有自己的 Solo 循环。进程停止后，由显式 resume 再启动。"
+      ]
+    }
+  ]
+}

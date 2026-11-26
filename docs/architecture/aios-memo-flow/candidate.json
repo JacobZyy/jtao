@@ -1,0 +1,1125 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "AIOS 记忆调用与 Memo 流转",
+    "locale": "zh-CN",
+    "output": "docs/architecture/aios-memo-flow/aios-memo-flow.html",
+    "quality_profile": "showcase",
+    "legend": {
+      "mode": "hidden"
+    },
+    "repository": {
+      "url": "https://github.com/rexleimo/aios.git",
+      "revision": "a995160096ffc9b1a81f318dc05195b6b6b68bb8"
+    },
+    "views": [
+      {
+        "id": "hook-view",
+        "label": "提问 Hook",
+        "focus": [
+          "submit-question",
+          "prompt-hook",
+          "hook-search",
+          "hook-output",
+          "hook-context"
+        ]
+      },
+      {
+        "id": "automatic-view",
+        "label": "自动写入与晋升",
+        "focus": [
+          "ctx-input",
+          "conclusion",
+          "judgment",
+          "skip-write",
+          "declaration",
+          "check-write",
+          "candidate",
+          "promotion-request",
+          "check-authority",
+          "promotion-denied"
+        ]
+      },
+      {
+        "id": "tools-view",
+        "label": "Skill、指令与工具调用",
+        "focus": [
+          "memo-skill",
+          "project-rules",
+          "mcp-process",
+          "tool-schema",
+          "choose-tool",
+          "share-intent",
+          "write-tool",
+          "shared-memo",
+          "write-receipt"
+        ]
+      },
+      {
+        "id": "recall-view",
+        "label": "查询与结果返回",
+        "focus": [
+          "next-chat",
+          "start-query",
+          "mcp-recall",
+          "cli-search",
+          "filter",
+          "match",
+          "return-result",
+          "return-cli"
+        ]
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "hook",
+      "label": "提问时自动补上下文 · 已配置 Hook"
+    },
+    {
+      "id": "automatic",
+      "label": "AIOS 单轮执行 · 从准备提示到自动写入"
+    },
+    {
+      "id": "promotion",
+      "label": "候选晋升 · 另行提交申请"
+    },
+    {
+      "id": "guidance",
+      "label": "Codex 选工具时读到的说明"
+    },
+    {
+      "id": "selection",
+      "label": "模型决定是否发起实际调用"
+    },
+    {
+      "id": "sharing",
+      "label": "直接共享 · MCP / CLI 手工写入共享池"
+    },
+    {
+      "id": "recall",
+      "label": "下次在同一项目查回 · MCP 和 CLI 的 Memo 检索"
+    }
+  ],
+  "mainPath": [
+    "conclusion",
+    "judgment",
+    "declaration",
+    "check-write",
+    "candidate"
+  ],
+  "semanticChecks": {
+    "allowedRoots": [
+      "submit-question",
+      "ctx-input",
+      "memo-skill",
+      "project-rules",
+      "mcp-process",
+      "share-intent",
+      "next-chat"
+    ],
+    "allowedTerminals": [
+      "hook-context",
+      "skip-write",
+      "promotion-denied",
+      "write-receipt",
+      "return-result",
+      "return-cli"
+    ],
+    "requiredPaths": [
+      {
+        "from": "submit-question",
+        "to": "hook-context"
+      },
+      {
+        "from": "ctx-input",
+        "to": "candidate"
+      },
+      {
+        "from": "candidate",
+        "to": "promotion-denied"
+      },
+      {
+        "from": "memo-skill",
+        "to": "choose-tool"
+      },
+      {
+        "from": "project-rules",
+        "to": "choose-tool"
+      },
+      {
+        "from": "mcp-process",
+        "to": "choose-tool"
+      },
+      {
+        "from": "choose-tool",
+        "to": "write-receipt"
+      },
+      {
+        "from": "next-chat",
+        "to": "return-result"
+      },
+      {
+        "from": "next-chat",
+        "to": "return-cli"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "submit-question",
+      "lane": "hook",
+      "col": 0,
+      "type": "external",
+      "label": "你提交新问题",
+      "sublabel": "Codex 开始这一轮",
+      "sources": [
+        {
+          "path": "client-sources/native-base/codex/project/hooks.json",
+          "line": 1,
+          "end_line": 11,
+          "label": "宿主在用户提交提示时触发 Hook"
+        }
+      ],
+      "yOffset": -86
+    },
+    {
+      "id": "prompt-hook",
+      "lane": "hook",
+      "col": 0,
+      "type": "backend",
+      "label": "触发提问 Hook",
+      "sublabel": "UserPromptSubmit",
+      "sources": [
+        {
+          "path": "client-sources/native-base/codex/project/hooks.json",
+          "line": 3,
+          "end_line": 11,
+          "label": "配置指向 AIOS 的 plan hook-user-prompt"
+        },
+        {
+          "path": "scripts/lib/foundation/planning/ops/cli.mjs",
+          "line": 454,
+          "end_line": 464,
+          "label": "Hook 命令从标准输入读取宿主事件"
+        }
+      ],
+      "yOffset": 4
+    },
+    {
+      "id": "hook-search",
+      "lane": "hook",
+      "col": 1,
+      "type": "backend",
+      "label": "Hook 直接查记忆",
+      "sublabel": "拿当前问题检索",
+      "sources": [
+        {
+          "path": "scripts/lib/foundation/planning/flow/user-prompt-submit.mjs",
+          "line": 29,
+          "end_line": 38,
+          "label": "Hook 在本地调用 collectTurnRecall"
+        },
+        {
+          "path": "scripts/lib/foundation/planning/flow/turn-recall.mjs",
+          "line": 207,
+          "end_line": 235,
+          "label": "召回直接使用 AIOS 统一检索函数"
+        }
+      ],
+      "yOffset": 4
+    },
+    {
+      "id": "hook-output",
+      "lane": "hook",
+      "col": 2,
+      "type": "backend",
+      "label": "返回状态块与声明",
+      "sublabel": "无命中也返回状态块",
+      "sources": [
+        {
+          "path": "scripts/lib/foundation/planning/flow/turn-recall.mjs",
+          "line": 308,
+          "end_line": 314,
+          "label": "collectTurnRecall 始终返回 block 含无命中状态"
+        },
+        {
+          "path": "scripts/lib/foundation/planning/flow/user-prompt-submit.mjs",
+          "line": 34,
+          "end_line": 46,
+          "label": "非空即写 additionalContext 并附声明指令"
+        }
+      ],
+      "yOffset": 4
+    },
+    {
+      "id": "hook-context",
+      "lane": "hook",
+      "col": 3,
+      "type": "external",
+      "label": "Codex 补进本轮",
+      "sublabel": "原生无后置声明消费",
+      "sources": [
+        {
+          "path": "scripts/lib/foundation/planning/flow/user-prompt-submit.mjs",
+          "line": 39,
+          "end_line": 46,
+          "label": "通过 Hook 输出追加上下文与声明指令"
+        },
+        {
+          "path": "client-sources/native-base/codex/project/hooks.json",
+          "line": 1,
+          "end_line": 14,
+          "label": "Codex 仅配提问 Hook，无回复后解析"
+        }
+      ],
+      "yOffset": 4
+    },
+    {
+      "id": "ctx-input",
+      "lane": "automatic",
+      "col": 0,
+      "type": "backend",
+      "label": "ctx-agent 直接召回",
+      "sublabel": "仅命中且单轮拼提示",
+      "sources": [
+        {
+          "path": "scripts/lib/foundation/ctx-agent-core/entry/run.mjs",
+          "line": 155,
+          "end_line": 169,
+          "label": "单轮入口取 collectTurnRecallResult.text"
+        },
+        {
+          "path": "scripts/lib/foundation/planning/flow/turn-recall.mjs",
+          "line": 271,
+          "end_line": 275,
+          "label": "text 字段仅在有命中时非空"
+        },
+        {
+          "path": "scripts/lib/foundation/ctx-agent-core/entry/run.mjs",
+          "line": 367,
+          "end_line": 374,
+          "label": "命中且为普通单轮时拼接召回与声明指令"
+        }
+      ],
+      "yOffset": -90
+    },
+    {
+      "id": "conclusion",
+      "lane": "automatic",
+      "col": 0,
+      "type": "external",
+      "label": "Codex 完成功能",
+      "sublabel": "开发环境改结账配置要重启",
+      "sources": [
+        {
+          "path": "skill-sources/memo/SKILL.md",
+          "line": 47,
+          "end_line": 53,
+          "label": "当轮 Agent 提炼已确认且可复用的事实"
+        }
+      ]
+    },
+    {
+      "id": "judgment",
+      "lane": "automatic",
+      "col": 1,
+      "type": "external",
+      "label": "同一个 Codex 判断",
+      "sublabel": "结论是否已确认且值得留",
+      "icon": "decision",
+      "sources": [
+        {
+          "path": "scripts/lib/memory/memo/flow/declaration.mjs",
+          "line": 90,
+          "end_line": 104,
+          "label": "由刚刚回答任务的模型判断并提议"
+        }
+      ]
+    },
+    {
+      "id": "skip-write",
+      "lane": "automatic",
+      "col": 1,
+      "type": "backend",
+      "label": "AIOS 跳过自动写入",
+      "sublabel": "回复没有肯定的记忆声明",
+      "icon": "stop",
+      "sources": [
+        {
+          "path": "scripts/lib/foundation/ctx-agent-core/entry/run.mjs",
+          "line": 409,
+          "end_line": 424,
+          "label": "没有声明或声明未确认时跳过"
+        }
+      ],
+      "yOffset": 90
+    },
+    {
+      "id": "declaration",
+      "lane": "automatic",
+      "col": 2,
+      "type": "external",
+      "label": "Codex 在回复末尾提议",
+      "sublabel": "写下结论与 verified=yes",
+      "sources": [
+        {
+          "path": "scripts/lib/memory/memo/flow/declaration.mjs",
+          "line": 90,
+          "end_line": 104,
+          "label": "记忆声明由当轮模型随回复交回"
+        }
+      ]
+    },
+    {
+      "id": "check-write",
+      "lane": "automatic",
+      "col": 3,
+      "type": "backend",
+      "label": "AIOS 读声明并检查",
+      "sublabel": "检查内容、轮次结果与来源",
+      "sources": [
+        {
+          "path": "scripts/lib/foundation/ctx-agent-core/entry/run.mjs",
+          "line": 409,
+          "end_line": 440,
+          "label": "AIOS 单轮入口读回复后启动自动写入"
+        },
+        {
+          "path": "scripts/lib/memory/memo/flow/autopilot.mjs",
+          "line": 182,
+          "end_line": 235,
+          "label": "检查内容、去重，按轮次结果确定范围"
+        }
+      ]
+    },
+    {
+      "id": "candidate",
+      "lane": "automatic",
+      "col": 3,
+      "type": "database",
+      "label": "候选已写进本地 Memo",
+      "sublabel": "已落盘，等待发布",
+      "sources": [
+        {
+          "path": "scripts/lib/memory/memo/flow/autopilot.mjs",
+          "line": 220,
+          "end_line": 275,
+          "label": "成功轮次的自动共享写入提交候选事件"
+        },
+        {
+          "path": "scripts/lib/memory/memo/storage/govern/provenance.mjs",
+          "line": 71,
+          "end_line": 95,
+          "label": "默认自动身份的共享记录标为候选"
+        },
+        {
+          "path": "scripts/lib/memory/memo/storage/events/events-write.mjs",
+          "line": 188,
+          "end_line": 214,
+          "label": "分配 ID 和序号并写入实际存储"
+        }
+      ],
+      "yOffset": 90
+    },
+    {
+      "id": "promotion-request",
+      "lane": "promotion",
+      "col": 1,
+      "type": "external",
+      "label": "你申请或 Codex 代发",
+      "sublabel": "提交候选 ID 和确认理由",
+      "sources": [
+        {
+          "path": "scripts/lib/memory/memo/cli/commands/curate/candidates.mjs",
+          "line": 91,
+          "end_line": 119,
+          "label": "候选命令接收申请并转交授权判断"
+        }
+      ],
+      "yOffset": 0
+    },
+    {
+      "id": "check-authority",
+      "lane": "promotion",
+      "col": 2,
+      "type": "security",
+      "label": "AIOS 检查发布授权",
+      "sublabel": "授权通过才具备晋升条件",
+      "icon": "decision",
+      "sources": [
+        {
+          "path": "scripts/lib/memory/memo/storage/govern/candidates.mjs",
+          "line": 230,
+          "end_line": 237,
+          "label": "该版本的可信授权关固定拒绝"
+        },
+        {
+          "path": "scripts/lib/memory/memo/storage/govern/candidates.mjs",
+          "line": 283,
+          "end_line": 311,
+          "label": "核对待发布候选、理由和内容检查"
+        },
+        {
+          "path": "scripts/lib/memory/memo/storage/govern/candidates.mjs",
+          "line": 328,
+          "end_line": 350,
+          "label": "获准分支会新建共享记录并引用候选"
+        }
+      ],
+      "yOffset": 0
+    },
+    {
+      "id": "promotion-denied",
+      "lane": "promotion",
+      "col": 3,
+      "type": "security",
+      "label": "本版拒绝晋升",
+      "sublabel": "留拒绝回执，候选待发布",
+      "icon": "stop",
+      "sources": [
+        {
+          "path": "scripts/lib/memory/memo/storage/govern/candidates.mjs",
+          "line": 230,
+          "end_line": 237,
+          "label": "无可用可信授权"
+        },
+        {
+          "path": "scripts/lib/memory/memo/storage/govern/candidates.mjs",
+          "line": 312,
+          "end_line": 325,
+          "label": "拒绝会写入回执并结束处理"
+        }
+      ],
+      "yOffset": 0
+    },
+    {
+      "id": "memo-skill",
+      "lane": "guidance",
+      "col": 0,
+      "type": "external",
+      "label": "memo Skill",
+      "sublabel": "五要素与 CLI 规则",
+      "sources": [
+        {
+          "path": "skill-sources/memo/SKILL.md",
+          "line": 19,
+          "end_line": 42,
+          "label": "提供记忆操作和 CLI 示例"
+        },
+        {
+          "path": "skill-sources/memo/SKILL.md",
+          "line": 55,
+          "end_line": 99,
+          "label": "约定五要素，文档称 memo add 也落候选"
+        }
+      ]
+    },
+    {
+      "id": "project-rules",
+      "lane": "guidance",
+      "col": 1,
+      "type": "external",
+      "label": "AGENTS.md 项目指令",
+      "sublabel": "开聊或继续先查，确认后记",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "line": 265,
+          "end_line": 275,
+          "label": "项目约定首轮、继续、记下与里程碑触发条件"
+        }
+      ]
+    },
+    {
+      "id": "mcp-process",
+      "lane": "guidance",
+      "col": 2,
+      "type": "backend",
+      "label": "Codex 启动本地 MCP",
+      "sublabel": "aios-memory 通过 stdio 对接",
+      "sources": [
+        {
+          "path": "scripts/lib/clients/native/distribution/emitters/codex-config.mjs",
+          "line": 93,
+          "end_line": 103,
+          "label": "为 Codex 注册本地 stdio MCP 与工作区"
+        }
+      ]
+    },
+    {
+      "id": "tool-schema",
+      "lane": "guidance",
+      "col": 3,
+      "type": "backend",
+      "label": "AIOS 提供工具说明",
+      "sublabel": "tools/list 返回用途和参数",
+      "sources": [
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 45,
+          "end_line": 79,
+          "label": "召回、写入与置顶工具的描述和入参"
+        },
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 165,
+          "end_line": 185,
+          "label": "tools/list 列出工具，tools/call 执行调用"
+        }
+      ]
+    },
+    {
+      "id": "choose-tool",
+      "lane": "selection",
+      "col": 1,
+      "type": "external",
+      "label": "当轮 Codex 选择工具",
+      "sublabel": "结合任务、指令和工具说明",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "line": 268,
+          "end_line": 275,
+          "label": "语义触发点由 Agent 执行"
+        },
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 45,
+          "end_line": 68,
+          "label": "工具描述提示何时召回或写入"
+        }
+      ],
+      "yOffset": 0
+    },
+    {
+      "id": "share-intent",
+      "lane": "sharing",
+      "col": 0,
+      "type": "external",
+      "label": "手工要求或模型记",
+      "sublabel": "MCP 或 CLI 手工写入",
+      "sources": [
+        {
+          "path": "scripts/lib/clients/native/distribution/emitters/codex-config.mjs",
+          "line": 93,
+          "end_line": 103,
+          "label": "为 Codex 配置项目记忆 MCP"
+        },
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 58,
+          "end_line": 68,
+          "label": "MCP 允许主动提交要共享的文本"
+        },
+        {
+          "path": "scripts/lib/memory/memo/cli/core/run.mjs",
+          "line": 43,
+          "end_line": 48,
+          "label": "CLI 入口默认 runtimeIdentity 为 null"
+        }
+      ]
+    },
+    {
+      "id": "write-tool",
+      "lane": "sharing",
+      "col": 1,
+      "type": "backend",
+      "label": "memory_write / add",
+      "sublabel": "MCP / CLI 显式写入",
+      "sources": [
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 115,
+          "end_line": 128,
+          "label": "MCP 仅接收 text 与 agent 发起共享写入"
+        },
+        {
+          "path": "scripts/lib/memory/memo/cli/commands/ops/events.mjs",
+          "line": 73,
+          "end_line": 103,
+          "label": "CLI memo add 校验五要素且无 runtimeIdentity"
+        },
+        {
+          "path": "scripts/lib/memory/memo/storage/mind/extraction.mjs",
+          "line": 39,
+          "end_line": 90,
+          "label": "拒绝相对日期与数组型 evidence_ref"
+        }
+      ]
+    },
+    {
+      "id": "shared-memo",
+      "lane": "sharing",
+      "col": 2,
+      "type": "database",
+      "label": "新建一条共享 Memo",
+      "sublabel": "按手工来源标 verified",
+      "sources": [
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 121,
+          "end_line": 138,
+          "label": "MCP 追加共享记录并返回 eventId"
+        },
+        {
+          "path": "scripts/lib/memory/memo/storage/govern/provenance.mjs",
+          "line": 47,
+          "end_line": 69,
+          "label": "无 runtimeIdentity 按 local_manual 标 verified"
+        },
+        {
+          "path": "scripts/lib/memory/memo/cli/commands/ops/events.mjs",
+          "line": 100,
+          "end_line": 103,
+          "label": "CLI 非候选写入同步镜像到旧会话"
+        }
+      ]
+    },
+    {
+      "id": "write-receipt",
+      "lane": "sharing",
+      "col": 3,
+      "type": "backend",
+      "label": "返回写入回执",
+      "sublabel": "新 ID；CLI 附修订提示",
+      "sources": [
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 133,
+          "end_line": 138,
+          "label": "MCP 返回 Memo stored 与新事件 ID"
+        },
+        {
+          "path": "scripts/lib/memory/memo/cli/commands/ops/events.mjs",
+          "line": 104,
+          "end_line": 120,
+          "label": "CLI 输出 ID 并提示可 --supersedes 的旧条目"
+        }
+      ]
+    },
+    {
+      "id": "next-chat",
+      "lane": "recall",
+      "col": 0,
+      "type": "external",
+      "label": "同一项目再开对话",
+      "sublabel": "又遇到结账配置",
+      "sources": [
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 88,
+          "end_line": 96,
+          "label": "查询读取当前绑定的工作区"
+        },
+        {
+          "path": "scripts/lib/clients/native/distribution/emitters/codex-config.mjs",
+          "line": 93,
+          "end_line": 103,
+          "label": "已配置的工具绑定工作区根"
+        }
+      ],
+      "yOffset": -90
+    },
+    {
+      "id": "start-query",
+      "lane": "recall",
+      "col": 0,
+      "type": "backend",
+      "label": "按上面的说明选择查",
+      "sublabel": "搜索结账配置",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "line": 268,
+          "end_line": 275,
+          "label": "开聊或恢复工作时按指令主动查"
+        },
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 45,
+          "end_line": 56,
+          "label": "工具说明给出召回时机和 query 参数"
+        }
+      ]
+    },
+    {
+      "id": "mcp-recall",
+      "lane": "recall",
+      "col": 1,
+      "type": "backend",
+      "label": "调用 memory_recall",
+      "sublabel": "MCP 把 query 传给 AIOS",
+      "sources": [
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 88,
+          "end_line": 107,
+          "label": "MCP 发起统一检索并格式化片段"
+        },
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 178,
+          "end_line": 185,
+          "label": "MCP server 分发工具调用"
+        }
+      ],
+      "yOffset": -63
+    },
+    {
+      "id": "cli-search",
+      "lane": "recall",
+      "col": 1,
+      "type": "backend",
+      "label": "用 CLI 查询",
+      "sublabel": "aios memo search",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "line": 268,
+          "end_line": 272,
+          "label": "项目指令规定 MCP 不可用时的 CLI 入口"
+        },
+        {
+          "path": "scripts/lib/memory/memo/cli/commands/ops/events.mjs",
+          "line": 193,
+          "end_line": 212,
+          "label": "CLI 读取 query 并调用 Memo 搜索"
+        },
+        {
+          "path": "scripts/lib/memory/memo/cli/commands/ops/events.mjs",
+          "line": 256,
+          "end_line": 269,
+          "label": "搜索使用同一 Memo 查询逻辑"
+        }
+      ],
+      "yOffset": 63
+    },
+    {
+      "id": "filter",
+      "lane": "recall",
+      "col": 2,
+      "type": "backend",
+      "label": "先筛出可见 Memo",
+      "sublabel": "滤候选/失效/归档/私有",
+      "sources": [
+        {
+          "path": "scripts/lib/memory/memo/storage/views/query.mjs",
+          "line": 276,
+          "end_line": 315,
+          "label": "可见性、时效、归档与私有 TTL 筛选先于匹配"
+        },
+        {
+          "path": "scripts/lib/memory/memo/storage/events/events-read.mjs",
+          "line": 25,
+          "end_line": 47,
+          "label": "按文件 stat 走进程内解析缓存"
+        }
+      ]
+    },
+    {
+      "id": "match",
+      "lane": "recall",
+      "col": 3,
+      "type": "backend",
+      "label": "匹配、扩散并排序",
+      "sublabel": "BM25+实体；<0.2新优先",
+      "sources": [
+        {
+          "path": "scripts/lib/memory/memo/storage/views/query.mjs",
+          "line": 237,
+          "end_line": 274,
+          "label": "实体直接匹配与一跳邻居扩散加分"
+        },
+        {
+          "path": "scripts/lib/memory/memo/storage/views/query.mjs",
+          "line": 336,
+          "end_line": 349,
+          "label": "BM25 与反馈计分，分差 <0.2 较新优先"
+        },
+        {
+          "path": "scripts/lib/memory/search/unified-search.mjs",
+          "line": 401,
+          "end_line": 406,
+          "label": "统一检索对各来源结果再排序截取"
+        }
+      ],
+      "yOffset": 0
+    },
+    {
+      "id": "return-result",
+      "lane": "recall",
+      "col": 3,
+      "type": "backend",
+      "label": "MCP 工具结果交回",
+      "sublabel": "仅片段和分，无 eventId",
+      "sources": [
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 97,
+          "end_line": 107,
+          "label": "格式化为文本片段，未透出 eventId"
+        }
+      ],
+      "yOffset": -90
+    },
+    {
+      "id": "return-cli",
+      "lane": "recall",
+      "col": 3,
+      "type": "backend",
+      "label": "CLI 输出交回",
+      "sublabel": "stdout 含 eventId",
+      "sources": [
+        {
+          "path": "scripts/lib/memory/memo/cli/commands/ops/events.mjs",
+          "line": 213,
+          "end_line": 226,
+          "label": "命中记录随 stdout 返回并附 pack 统计"
+        }
+      ],
+      "yOffset": 90
+    }
+  ],
+  "edges": [
+    {
+      "id": "new-question",
+      "from": "submit-question",
+      "to": "prompt-hook",
+      "label": "Hook 已配置",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    },
+    {
+      "id": "hook-local",
+      "from": "prompt-hook",
+      "to": "hook-search",
+      "label": "直接查"
+    },
+    {
+      "id": "hook-hit",
+      "from": "hook-search",
+      "to": "hook-output",
+      "label": "非 noop"
+    },
+    {
+      "id": "inject",
+      "from": "hook-output",
+      "to": "hook-context",
+      "label": "补上下文",
+      "variant": "emphasis"
+    },
+    {
+      "id": "ctx-prompt",
+      "from": "ctx-input",
+      "to": "conclusion",
+      "label": "交给 Codex",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    },
+    {
+      "id": "auto-judge",
+      "from": "conclusion",
+      "to": "judgment"
+    },
+    {
+      "id": "skip",
+      "from": "judgment",
+      "to": "skip-write",
+      "label": "未提议或未确认",
+      "variant": "dashed",
+      "role": "branch",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    },
+    {
+      "id": "propose",
+      "from": "judgment",
+      "to": "declaration",
+      "label": "值得记"
+    },
+    {
+      "id": "finish-answer",
+      "from": "declaration",
+      "to": "check-write",
+      "label": "随回复交回"
+    },
+    {
+      "id": "append-candidate",
+      "from": "check-write",
+      "to": "candidate",
+      "label": "成功且检查通过",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    },
+    {
+      "id": "leave-pending",
+      "from": "candidate",
+      "to": "promotion-request",
+      "label": "另行申请时",
+      "variant": "dashed",
+      "role": "branch",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop"
+    },
+    {
+      "id": "submit-promotion",
+      "from": "promotion-request",
+      "to": "check-authority",
+      "label": "提交"
+    },
+    {
+      "id": "deny",
+      "from": "check-authority",
+      "to": "promotion-denied",
+      "label": "缺可信授权",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "skill-guides",
+      "from": "memo-skill",
+      "to": "choose-tool",
+      "label": "操作规则",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "id": "rules-guide",
+      "from": "project-rules",
+      "to": "choose-tool",
+      "label": "使用时机",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop"
+    },
+    {
+      "id": "discover",
+      "from": "mcp-process",
+      "to": "tool-schema",
+      "label": "tools/list"
+    },
+    {
+      "id": "tool-guides",
+      "from": "tool-schema",
+      "to": "choose-tool",
+      "label": "可用工具",
+      "fromSide": "bottom",
+      "toSide": "right"
+    },
+    {
+      "id": "choose-write",
+      "from": "choose-tool",
+      "to": "write-tool",
+      "label": "选择写入时",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop",
+      "variant": "emphasis"
+    },
+    {
+      "id": "explicit-call",
+      "from": "share-intent",
+      "to": "write-tool",
+      "label": "实际调用",
+      "variant": "emphasis"
+    },
+    {
+      "id": "append-shared",
+      "from": "write-tool",
+      "to": "shared-memo",
+      "label": "写入成功",
+      "variant": "emphasis"
+    },
+    {
+      "id": "write-ack",
+      "from": "shared-memo",
+      "to": "write-receipt",
+      "variant": "emphasis"
+    },
+    {
+      "id": "search-later",
+      "from": "next-chat",
+      "to": "start-query",
+      "label": "遇到相关问题",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    },
+    {
+      "id": "take-mcp",
+      "from": "start-query",
+      "to": "mcp-recall",
+      "label": "MCP 可用",
+      "role": "branch"
+    },
+    {
+      "id": "take-cli",
+      "from": "start-query",
+      "to": "cli-search",
+      "label": "MCP 不可用",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "query-memo-tool",
+      "from": "mcp-recall",
+      "to": "filter",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "query-memo-cli",
+      "from": "cli-search",
+      "to": "filter",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "bottom"
+    },
+    {
+      "id": "read-shared",
+      "from": "shared-memo",
+      "to": "filter",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    },
+    {
+      "id": "match-visible",
+      "from": "filter",
+      "to": "match",
+      "label": "查询可见记录",
+      "variant": "emphasis"
+    },
+    {
+      "id": "return-mcp",
+      "from": "match",
+      "to": "return-result",
+      "label": "经 MCP 查询",
+      "role": "branch",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "route": "straight"
+    },
+    {
+      "id": "return-cli",
+      "from": "match",
+      "to": "return-cli",
+      "label": "经 CLI 查询",
+      "role": "branch",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    }
+  ]
+}

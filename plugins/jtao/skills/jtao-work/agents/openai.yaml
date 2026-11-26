@@ -1,0 +1,8 @@
+interface:
+  display_name: "jtao Work"
+  short_description: "Interactive WorkItem DAG with real verification receipts"
+  default_prompt: "Use $jtao-work to break this requirement into a verified WorkItem plan and execute it step by step."
+  brand_color: "#2563EB"
+
+policy:
+  allow_implicit_invocation: false

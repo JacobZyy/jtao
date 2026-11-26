@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "de9f372d-d337-4f66-a5b4-d429e5bcaff8",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "docs/architecture/aios-memory/candidate.json",
+  "output": "docs/architecture/aios-memory/aios-memory.html",
+  "specification": {
+    "sha256": "fc60be62061b9eba4e3204b0e8554058646ce8165fafbeac02909b051417240c",
+    "bytes": 11151
+  },
+  "artifact": {
+    "sha256": "b1b7ba7aa1db122d891086f28fbee996b81dbc869ceeeb553f758befe709bb4e",
+    "bytes": 853014
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "91867c60-dbcd-4499-af41-666e48a8b2e0",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "docs/architecture/aios-memo-flow/candidate.json",
+  "output": "docs/architecture/aios-memo-flow/aios-memo-flow.html",
+  "specification": {
+    "sha256": "bbfc8b5aff5b961153ba3b5394dd0a81987a2bd209ed5ee40b68d6c512ca8ded",
+    "bytes": 28929
+  },
+  "artifact": {
+    "sha256": "737ec982f5e1588fc7d621eca16fb4a5a7fc83c509c6ca0689ea5e167ada4179",
+    "bytes": 908082
+  }
+}

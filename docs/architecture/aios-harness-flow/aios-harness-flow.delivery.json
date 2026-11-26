@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "29218dab-1e69-4266-8ea8-a1f9dc6fb678",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "docs/architecture/aios-harness-flow/candidate.json",
+  "output": "docs/architecture/aios-harness-flow/aios-harness-flow.html",
+  "specification": {
+    "sha256": "f2398f626c96f55bc8b715e928fc53dc82cfecffe8d0d51a524c476102a25dab",
+    "bytes": 6947
+  },
+  "artifact": {
+    "sha256": "8d74898b1ffa96ebacb8cf60c92323dbac5d9a2784aa56d5bb85ca36217028eb",
+    "bytes": 846850
+  }
+}

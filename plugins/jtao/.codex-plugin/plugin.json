@@ -1,0 +1,37 @@
+{
+  "name": "jtao",
+  "version": "0.2.0",
+  "description": "Local engineering Harness for Coding Agents: persistent FTS5 memory, WorkItem DAG with real verification receipts, and detached background Solo/Team orchestration.",
+  "author": {
+    "name": "Jacob"
+  },
+  "keywords": [
+    "harness",
+    "memory",
+    "workflow",
+    "solo",
+    "team",
+    "mcp"
+  ],
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/codex-hooks.json",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "jtao Harness",
+    "shortDescription": "Local memory, WorkItem DAG, and background Solo/Team runner",
+    "longDescription": "Bundles jtao's local SQLite WAL/FTS5 memory recall hooks, 18 MCP tools (memory, workflow DAG, real verification receipts, and non-blocking background Solo/Team scheduler), plus explicit-only workflow skills ($jtao-work, $jtao-solo, $jtao-team) and memory skill ($jtao-memory).",
+    "developerName": "Jacob",
+    "category": "Coding",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Use $jtao-work to break this requirement into a verified WorkItem plan",
+      "Use $jtao-solo to run the active WorkItem unattended in the background",
+      "Use $jtao-team to split and run this feature concurrently with file ownership checks"
+    ],
+    "brandColor": "#2563EB"
+  }
+}

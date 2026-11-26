@@ -1,0 +1,31 @@
+{
+  "description": "jtao local memory, WorkItem, and background Solo/Team run status hooks (zero-pollution on uninitialized repos)",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/bin/jtao-launch.sh\" hook session-start",
+            "timeout": 10,
+            "statusMessage": "jtao · 置顶、工单与后台进度恢复",
+            "description": "Inject pinned project rules, session continuity, active WorkItem, and background Solo/Team run status when .jtao exists."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/bin/jtao-launch.sh\" hook user-prompt-submit",
+            "timeout": 10,
+            "statusMessage": "jtao · 记忆与任务状态召回",
+            "description": "Perform hit-gated FTS5 memory recall and surface active WorkItem or background run status silently when .jtao exists."
+          }
+        ]
+      }
+    ]
+  }
+}

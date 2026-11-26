@@ -1,0 +1,8 @@
+interface:
+  display_name: "jtao Solo"
+  short_description: "Launch and manage detached background Solo agent loops"
+  default_prompt: "Use $jtao-solo to launch the active WorkItem as a detached background Solo loop."
+  brand_color: "#0EA5E9"
+
+policy:
+  allow_implicit_invocation: false

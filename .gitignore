@@ -1,0 +1,14 @@
+# Build output
+/bin/
+/jtao
+
+# Local runtime state
+/.jtao/
+*.db
+*.db-wal
+*.db-shm
+
+# OS / editor noise
+.DS_Store
+.idea/
+.vscode/

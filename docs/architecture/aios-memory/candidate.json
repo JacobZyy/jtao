@@ -1,0 +1,434 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AIOS 记忆模块内部与接口",
+    "locale": "zh-CN",
+    "output": "docs/architecture/aios-memory/aios-memory.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/rexleimo/aios.git",
+      "revision": "a995160096ffc9b1a81f318dc05195b6b6b68bb8"
+    },
+    "legend": {
+      "entries": {
+        "backend": {
+          "label": "接口与内部处理"
+        },
+        "database": {
+          "label": "本地持久化"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "memo-api",
+      "type": "backend",
+      "label": "Memo 写入接口",
+      "sublabel": "memory_write / checkpoint / memo add",
+      "pos": [
+        48,
+        52
+      ],
+      "size": [
+        244,
+        78
+      ],
+      "sources": [
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 58,
+          "end_line": 80,
+          "label": "MCP 写入与置顶契约"
+        },
+        {
+          "path": "scripts/lib/memory/memo/cli/commands/ops/events.mjs",
+          "line": 73,
+          "end_line": 104,
+          "label": "CLI memo add 校验五要素并直接写入"
+        },
+        {
+          "path": "scripts/lib/memory/memo/cli/commands/ops/checkpoint.mjs",
+          "line": 15,
+          "end_line": 30,
+          "label": "Memo CLI 置顶操作"
+        }
+      ]
+    },
+    {
+      "id": "recall-api",
+      "type": "backend",
+      "label": "项目召回接口",
+      "sublabel": "memory_recall / aios search / Hook",
+      "pos": [
+        384,
+        52
+      ],
+      "size": [
+        235,
+        78
+      ],
+      "sources": [
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 88,
+          "end_line": 107,
+          "label": "MCP 输入与纯文本片段输出"
+        },
+        {
+          "path": "scripts/lib/memory/search/cli.mjs",
+          "line": 22,
+          "end_line": 39,
+          "label": "CLI 查询参数与结构化结果"
+        },
+        {
+          "path": "scripts/lib/foundation/planning/flow/user-prompt-submit.mjs",
+          "line": 34,
+          "end_line": 46,
+          "label": "提问 Hook 返回状态块与声明指令"
+        }
+      ]
+    },
+    {
+      "id": "context-api",
+      "type": "backend",
+      "label": "ContextDB CLI",
+      "sublabel": "会话 / 事件 / 检查点 / 查询 / 打包",
+      "pos": [
+        721,
+        52
+      ],
+      "size": [
+        248,
+        78
+      ],
+      "sources": [
+        {
+          "path": "mcp-server/src/contextdb/shell/cli/handlers.ts",
+          "line": 193,
+          "end_line": 225,
+          "label": "会话与检索命令"
+        },
+        {
+          "path": "mcp-server/src/contextdb/shell/cli/handlers.ts",
+          "line": 116,
+          "end_line": 140,
+          "label": "上下文包输出"
+        }
+      ]
+    },
+    {
+      "id": "memo-write",
+      "type": "backend",
+      "label": "Memo 写入与置顶",
+      "sublabel": "权限归类 / 加锁 / 置顶窗口回执",
+      "pos": [
+        48,
+        247
+      ],
+      "size": [
+        244,
+        85
+      ],
+      "sources": [
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 115,
+          "end_line": 161,
+          "label": "MCP 走 local_manual 写事件或置顶并算回执"
+        },
+        {
+          "path": "scripts/lib/memory/memo/storage/events/events-write.mjs",
+          "line": 159,
+          "end_line": 215,
+          "label": "事件加锁、替代校验与落盘"
+        },
+        {
+          "path": "scripts/lib/memory/memo/storage/govern/pinned.mjs",
+          "line": 162,
+          "end_line": 174,
+          "label": "计算置顶窗口回执（当前无启动自动注入）"
+        }
+      ]
+    },
+    {
+      "id": "recall",
+      "type": "backend",
+      "label": "统一召回",
+      "sublabel": "stat 缓存 / BM25+实体+反馈 / 合并",
+      "pos": [
+        384,
+        247
+      ],
+      "size": [
+        235,
+        85
+      ],
+      "sources": [
+        {
+          "path": "scripts/lib/memory/memo/storage/views/query.mjs",
+          "line": 304,
+          "end_line": 349,
+          "label": "过滤、BM25、实体扩散与 0.2 分差排序"
+        },
+        {
+          "path": "scripts/lib/memory/search/unified-search.mjs",
+          "line": 199,
+          "end_line": 236,
+          "label": "匹配事件与置顶全文（绕过窗口）"
+        },
+        {
+          "path": "scripts/lib/memory/search/unified-search.mjs",
+          "line": 306,
+          "end_line": 406,
+          "label": "读 ContextDB JSONL 索引并跨来源排序"
+        }
+      ]
+    },
+    {
+      "id": "context-process",
+      "type": "backend",
+      "label": "ContextDB 会话处理",
+      "sublabel": "会话锁 / 事件与检查点 / 上下文包",
+      "pos": [
+        721,
+        247
+      ],
+      "size": [
+        248,
+        85
+      ],
+      "sources": [
+        {
+          "path": "mcp-server/src/contextdb/store/core.ts",
+          "line": 1424,
+          "end_line": 1468,
+          "label": "会话加锁与事件写入"
+        },
+        {
+          "path": "mcp-server/src/contextdb/store/core.ts",
+          "line": 1522,
+          "end_line": 1549,
+          "label": "保存检查点与连续性摘要"
+        },
+        {
+          "path": "mcp-server/src/contextdb/store/core.ts",
+          "line": 1651,
+          "end_line": 1666,
+          "label": "从原始文件读取上下文"
+        }
+      ]
+    },
+    {
+      "id": "memo-files",
+      "type": "database",
+      "label": "Memo 事件与置顶文件",
+      "sublabel": ".aios/memo/",
+      "pos": [
+        48,
+        450
+      ],
+      "size": [
+        244,
+        84
+      ],
+      "sources": [
+        {
+          "path": "scripts/lib/environment/aios/state-root.mjs",
+          "line": 54,
+          "end_line": 59,
+          "label": "默认 Memo 路径"
+        },
+        {
+          "path": "scripts/lib/memory/memo/storage/base/paths.mjs",
+          "line": 12,
+          "end_line": 38,
+          "label": "事件与置顶文件路径"
+        },
+        {
+          "path": "scripts/lib/memory/memo/storage/base/constants.mjs",
+          "line": 1,
+          "end_line": 6,
+          "label": "存储方式与默认值"
+        }
+      ]
+    },
+    {
+      "id": "context-index",
+      "type": "database",
+      "label": "ContextDB 检索索引",
+      "sublabel": "JSONL / SQLite",
+      "pos": [
+        384,
+        450
+      ],
+      "size": [
+        235,
+        84
+      ],
+      "sources": [
+        {
+          "path": "mcp-server/src/contextdb/store/core.ts",
+          "line": 1486,
+          "end_line": 1500,
+          "label": "写入 JSONL 与 SQLite"
+        },
+        {
+          "path": "mcp-server/src/contextdb/store/core.ts",
+          "line": 2371,
+          "end_line": 2399,
+          "label": "同步与重建 SQLite"
+        },
+        {
+          "path": "mcp-server/src/contextdb/store/core.ts",
+          "line": 2523,
+          "end_line": 2540,
+          "label": "ContextDB 查询 SQLite"
+        }
+      ]
+    },
+    {
+      "id": "session-files",
+      "type": "database",
+      "label": "ContextDB 会话文件",
+      "sublabel": ".aios/context-db/sessions/",
+      "pos": [
+        721,
+        450
+      ],
+      "size": [
+        248,
+        84
+      ],
+      "sources": [
+        {
+          "path": "mcp-server/src/contextdb/store/core.ts",
+          "line": 1091,
+          "end_line": 1122,
+          "label": "会话目录与文件布局"
+        },
+        {
+          "path": "mcp-server/src/contextdb/store/core.ts",
+          "line": 1539,
+          "end_line": 1549,
+          "label": "检查点与连续性文件"
+        },
+        {
+          "path": "mcp-server/src/contextdb/store/core.ts",
+          "line": 2412,
+          "end_line": 2449,
+          "label": "索引重建读取会话文件"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "对外接口",
+      "wraps": [
+        "memo-api",
+        "recall-api",
+        "context-api"
+      ],
+      "pad": 20
+    },
+    {
+      "kind": "region",
+      "label": "记忆模块内部",
+      "wraps": [
+        "memo-write",
+        "recall",
+        "context-process",
+        "memo-files",
+        "context-index",
+        "session-files"
+      ],
+      "pad": 25
+    }
+  ],
+  "connections": [
+    {
+      "id": "memo-entry",
+      "from": "memo-api",
+      "to": "memo-write",
+      "label": "记录 / 置顶",
+      "variant": "emphasis"
+    },
+    {
+      "id": "recall-entry",
+      "from": "recall-api",
+      "to": "recall",
+      "label": "发起查询",
+      "variant": "emphasis"
+    },
+    {
+      "id": "context-entry",
+      "from": "context-api",
+      "to": "context-process",
+      "label": "执行会话操作",
+      "variant": "emphasis"
+    },
+    {
+      "id": "memo-persist",
+      "from": "memo-write",
+      "to": "memo-files",
+      "label": "事件与置顶落盘"
+    },
+    {
+      "id": "recall-memo",
+      "from": "recall",
+      "to": "memo-files",
+      "label": "检索 Memo",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "recall-index",
+      "from": "recall",
+      "to": "context-index",
+      "label": "读 JSONL 索引"
+    },
+    {
+      "id": "context-index-access",
+      "from": "context-process",
+      "to": "context-index",
+      "label": "维护 / 查询",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "context-files-access",
+      "from": "context-process",
+      "to": "session-files",
+      "label": "读写原始记录"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Memo 写入",
+      "items": [
+        "MCP memory_write 与 CLI memo add 默认无 runtimeIdentity，均按 local_manual 落为 verified；仅 ctx-agent 自动共享写入落为 candidate。",
+        "memory_checkpoint 只写 .aios/memo/<storage>/pinned/ 并返回窗口回执，未镜像旧 workspace-memory；窗口当前无启动自动注入，实际靠主动搜全文或 pin show 读取。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "项目召回",
+      "items": [
+        "Memo 读路径带 stat 解析缓存，经可见性、归档与 30 天私有 TTL 过滤后，按 BM25、实体一跳扩散与反馈打分（分差 <0.2 较新优先），并与置顶全文及 ContextDB JSONL 索引合并。",
+        "MCP memory_recall 仅返回来源、分数与片段（不含 eventId），也没有 useful/supersede 工具；提问 Hook 在非 noop 轮次无命中也返回状态块并附声明指令。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "ContextDB 读写",
+      "items": [
+        "事件与检查点先落会话文件，再维护 JSONL 与 SQLite 索引。原生检索查询 SQLite，缺失时可从会话文件重建。",
+        "上下文包按会话 ID 读取摘要、事件、检查点、连续性与 Offload 引用，再按筛选条件与预算组包。"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,352 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AIOS Harness 架构",
+    "locale": "zh-CN",
+    "output": "docs/architecture/aios-harness/aios-harness.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/rexleimo/aios.git",
+      "revision": "375ab47f8e11d9ce037e0a3c5ed6d652a2043853"
+    },
+    "legend": {
+      "entries": {
+        "database": {
+          "label": "本地持久化"
+        },
+        "external": {
+          "label": "外部客户端"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "agent",
+      "type": "external",
+      "label": "外部编码客户端",
+      "sublabel": "Codex / Claude Code / Pi",
+      "pos": [
+        40,
+        44
+      ],
+      "size": [
+        205,
+        80
+      ],
+      "sources": [
+        {
+          "path": "README-zh.md",
+          "line": 150,
+          "end_line": 156,
+          "label": "编码客户端接入"
+        },
+        {
+          "path": "scripts/lib/execution/harness/team/subagent-runtime/run/one-shot-runner.mjs",
+          "line": 59,
+          "end_line": 88,
+          "label": "启动客户端并接收结果"
+        }
+      ]
+    },
+    {
+      "id": "host",
+      "type": "backend",
+      "label": "AIOS 入口与客户端适配",
+      "sublabel": "CLI / Hooks / MCP / 能力投影",
+      "pos": [
+        352,
+        44
+      ],
+      "size": [
+        223,
+        80
+      ],
+      "sources": [
+        {
+          "path": "scripts/aios.mjs",
+          "line": 5,
+          "end_line": 27,
+          "label": "CLI 入口与工作区"
+        },
+        {
+          "path": "scripts/aios-init.mjs",
+          "line": 191,
+          "end_line": 214,
+          "label": "客户端指引与钩子"
+        },
+        {
+          "path": "scripts/aios-mcp-server.mjs",
+          "line": 730,
+          "end_line": 775,
+          "label": "意图路由与证据提交"
+        }
+      ]
+    },
+    {
+      "id": "workflow",
+      "type": "backend",
+      "label": "工作流策略与计划",
+      "sublabel": "宿主路由 / 工单 / 激活绑定",
+      "pos": [
+        683,
+        44
+      ],
+      "size": [
+        205,
+        80
+      ],
+      "sources": [
+        {
+          "path": "scripts/lib/foundation/planning/contract/workflow-policy.mjs",
+          "line": 392,
+          "end_line": 453,
+          "label": "能力判定与计划策略"
+        },
+        {
+          "path": "scripts/lib/foundation/planning/flow/auto-gate.mjs",
+          "line": 179,
+          "end_line": 213,
+          "label": "按需绑定能力激活"
+        },
+        {
+          "path": "scripts/lib/foundation/planning/flow/auto-gate.mjs",
+          "line": 237,
+          "end_line": 261,
+          "label": "建计划并绑定能力"
+        }
+      ]
+    },
+    {
+      "id": "rex",
+      "type": "backend",
+      "label": "Rex Harness",
+      "sublabel": "Fact → Capability → Evidence",
+      "pos": [
+        994,
+        44
+      ],
+      "size": [
+        207,
+        80
+      ],
+      "sources": [
+        {
+          "path": ".gitmodules",
+          "line": 1,
+          "end_line": 8,
+          "label": "Git 子模块"
+        },
+        {
+          "path": "scripts/lib/execution/workflows/adapters/rex-harness-adapter.mjs",
+          "line": 5,
+          "end_line": 19,
+          "label": "宿主调用公开入口"
+        },
+        {
+          "path": "scripts/lib/execution/workflows/adapters/rex-activation-store.mjs",
+          "line": 281,
+          "end_line": 309,
+          "label": "校验命令证据并推进"
+        }
+      ],
+      "tag": "Git 子模块"
+    },
+    {
+      "id": "execution",
+      "type": "backend",
+      "label": "Team / Solo 执行",
+      "sublabel": "任务调度 / 连续运行与恢复",
+      "pos": [
+        40,
+        320
+      ],
+      "size": [
+        205,
+        80
+      ],
+      "sources": [
+        {
+          "path": "scripts/lib/execution/lifecycle/run/work.mjs",
+          "line": 4,
+          "end_line": 31,
+          "label": "work 复用调度器"
+        },
+        {
+          "path": "scripts/lib/execution/harness/team/subagent-runtime/run/one-shot-runner.mjs",
+          "line": 40,
+          "end_line": 88,
+          "label": "调用受支持的客户端运行时"
+        },
+        {
+          "path": "scripts/lib/execution/harness/solo/solo-runtime/support/state.mjs",
+          "line": 56,
+          "end_line": 110,
+          "label": "落盘轮次与连续性记录"
+        }
+      ]
+    },
+    {
+      "id": "memory",
+      "type": "backend",
+      "label": "ContextDB / Memo",
+      "sublabel": "按需召回 / 会话与项目记忆",
+      "pos": [
+        408,
+        189
+      ],
+      "size": [
+        216,
+        78
+      ],
+      "sources": [
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 88,
+          "end_line": 97,
+          "label": "统一搜索入口"
+        },
+        {
+          "path": "scripts/memory-mcp-server.mjs",
+          "line": 115,
+          "end_line": 151,
+          "label": "项目 memo 与置顶记录"
+        },
+        {
+          "path": "scripts/lib/memory/search/unified-search.mjs",
+          "line": 332,
+          "end_line": 381,
+          "label": "跨 memo、会话与计划查找"
+        }
+      ]
+    },
+    {
+      "id": "workspace",
+      "type": "database",
+      "label": "项目状态与证据",
+      "sublabel": "计划 / 会话 / 记忆 / 回执",
+      "pos": [
+        683,
+        320
+      ],
+      "size": [
+        205,
+        80
+      ],
+      "sources": [
+        {
+          "path": "scripts/lib/environment/aios/state-root.mjs",
+          "line": 34,
+          "end_line": 55,
+          "label": "ContextDB 与 memo 路径"
+        },
+        {
+          "path": "scripts/lib/foundation/planning/contract/contract.mjs",
+          "line": 19,
+          "end_line": 29,
+          "label": "计划正文与活动状态"
+        },
+        {
+          "path": "mcp-server/src/contextdb/store/core.ts",
+          "line": 1539,
+          "end_line": 1585,
+          "label": "检查点和派生索引"
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "agent-to-host",
+      "from": "agent",
+      "to": "host",
+      "label": "意图与证据",
+      "variant": "emphasis"
+    },
+    {
+      "id": "host-to-workflow",
+      "from": "host",
+      "to": "workflow",
+      "label": "工作流请求",
+      "variant": "emphasis"
+    },
+    {
+      "id": "workflow-to-rex",
+      "from": "workflow",
+      "to": "rex",
+      "label": "能力与证据",
+      "variant": "emphasis"
+    },
+    {
+      "id": "host-to-execution",
+      "from": "host",
+      "to": "execution",
+      "label": "按需调度",
+      "fromSide": "bottom",
+      "toSide": "right"
+    },
+    {
+      "id": "execution-to-agent",
+      "from": "execution",
+      "to": "agent",
+      "label": "启动 Agent"
+    },
+    {
+      "id": "host-to-memory",
+      "from": "host",
+      "to": "memory",
+      "label": "按需召回"
+    },
+    {
+      "id": "workflow-to-workspace",
+      "from": "workflow",
+      "to": "workspace",
+      "label": "按策略落盘"
+    },
+    {
+      "id": "memory-to-workspace",
+      "from": "memory",
+      "to": "workspace",
+      "label": "读写项目记忆"
+    },
+    {
+      "id": "execution-to-workspace",
+      "from": "execution",
+      "to": "workspace",
+      "label": "记录运行证据"
+    },
+    {
+      "id": "host-to-agent",
+      "from": "host",
+      "to": "agent",
+      "label": "返回决策"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "工作流与证据",
+      "items": [
+        "编码客户端声明意图。AIOS 返回路由决策，适用时给出 Rex 当前命令。",
+        "客户端执行后提交回执。Rex 校验当前命令要求的证据，再推进工程步骤。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "执行与宿主",
+      "items": [
+        "Codex 等客户端负责交互、模型调用、文件编辑和工具执行。",
+        "Team / Solo 按需启动客户端，用于并行调度和可恢复长任务。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "跨会话恢复",
+      "items": [
+        "工作流状态、计划和执行回执按工单保存，支撑下一次会话恢复进度。",
+        "ContextDB / Memo 按工作区保存会话线索和项目记忆，支持按需召回。"
+      ]
+    }
+  ]
+}
