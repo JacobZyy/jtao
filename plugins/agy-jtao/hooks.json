@@ -1,0 +1,18 @@
+{
+  "jtao-harness": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "./bin/jtao-launch.sh hook agy-session-start",
+        "timeout": 10
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "./bin/jtao-launch.sh hook agy-pre-invocation",
+        "timeout": 10
+      }
+    ]
+  }
+}

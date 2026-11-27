@@ -105,6 +105,38 @@ func newHookCmd(app *App) *cobra.Command {
 				return err
 			},
 		},
+		&cobra.Command{
+			Use:   "agy-session-start",
+			Short: "Handle Antigravity SessionStart hook (camelCase stdin -> injectSteps stdout)",
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				raw, err := readStdin(cmd)
+				if err != nil {
+					return err
+				}
+				out, err := hook.HandleAGYSessionStart(cmd.Context(), app.Memory, app.Workflow, raw)
+				if err != nil {
+					return err
+				}
+				_, err = cmd.OutOrStdout().Write(out)
+				return err
+			},
+		},
+		&cobra.Command{
+			Use:   "agy-pre-invocation",
+			Short: "Handle Antigravity PreInvocation hook with per-prompt deduplication",
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				raw, err := readStdin(cmd)
+				if err != nil {
+					return err
+				}
+				out, err := hook.HandleAGYPreInvocation(cmd.Context(), app.Memory, app.Workflow, raw)
+				if err != nil {
+					return err
+				}
+				_, err = cmd.OutOrStdout().Write(out)
+				return err
+			},
+		},
 	)
 
 	return hookCmd

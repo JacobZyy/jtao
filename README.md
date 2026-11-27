@@ -53,6 +53,9 @@ make install
 codex plugin marketplace add "$(pwd)"
 codex plugin add jtao@jtao
 
-# 7. 或按仓库配置 Claude Code（先 --dry-run 预览）
+# 7. 安装为 Antigravity 原生插件（同步到 ~/.gemini/config/plugins/jtao，与 Codex 共享同一套 .jtao 数据）
+make agy-plugin-install
+
+# 8. 或按仓库配置 Claude Code（先 --dry-run 预览）
 ./bin/jtao init --client claude --dry-run
 ```

@@ -66,8 +66,45 @@ func HandleUserPromptSubmit(ctx context.Context, mem *memory.SQLiteService, wf *
 	if msg == "" {
 		msg = strings.TrimSpace(p.Message)
 	}
-	if msg == "" || ws == "" {
+	additional := buildTurnContext(ctx, mem, wf, ws, msg, p.Client, sessID, p.ExplicitIntent)
+	if additional == "" {
 		return []byte("{}\n"), nil
+	}
+
+	out := map[string]any{
+		"hookSpecificOutput": map[string]any{
+			"hookEventName":     "UserPromptSubmit",
+			"additionalContext": additional,
+		},
+		"additionalContext": additional,
+	}
+	raw, err := json.Marshal(out)
+	return append(raw, '\n'), err
+}
+
+// HandleSessionStart injects window-capped pinned project rules and latest continuity.
+func HandleSessionStart(ctx context.Context, mem *memory.SQLiteService, wf *workflow.SQLiteService, defaultWorkspace string, stdin []byte) ([]byte, error) {
+	_, ws, sessID := parsePayload(stdin, defaultWorkspace)
+	additional := buildSessionStartContext(ctx, mem, wf, ws, sessID)
+	if additional == "" {
+		return []byte("{}\n"), nil
+	}
+
+	out := map[string]any{
+		"hookSpecificOutput": map[string]any{
+			"hookEventName":     "SessionStart",
+			"additionalContext": additional,
+		},
+		"additionalContext": additional,
+	}
+	raw, err := json.Marshal(out)
+	return append(raw, '\n'), err
+}
+
+func buildTurnContext(ctx context.Context, mem *memory.SQLiteService, wf *workflow.SQLiteService, ws, msg, client, sessID, explicitIntent string) string {
+	msg = strings.TrimSpace(msg)
+	if msg == "" || ws == "" {
+		return ""
 	}
 
 	memDir, memErr := memory.ResolveMemoryDir(ws)
@@ -75,7 +112,7 @@ func HandleUserPromptSubmit(ctx context.Context, mem *memory.SQLiteService, wf *
 	hasMem := dbExists(memDir, memErr, "memory.db")
 	hasWF := dbExists(wfDir, wfErr, "workflow.db")
 	if !hasMem && !hasWF {
-		return []byte("{}\n"), nil
+		return ""
 	}
 
 	var sections []string
@@ -91,8 +128,8 @@ func HandleUserPromptSubmit(ctx context.Context, mem *memory.SQLiteService, wf *
 	}
 	decision := wf.ClassifyPolicy(workflow.PolicyClassifyInput{
 		Message:        msg,
-		ExplicitIntent: p.ExplicitIntent,
-		Client:         p.Client,
+		ExplicitIntent: explicitIntent,
+		Client:         client,
 		SessionID:      sessID,
 		ActiveItem:     active,
 	})
@@ -119,7 +156,7 @@ func HandleUserPromptSubmit(ctx context.Context, mem *memory.SQLiteService, wf *
 		recall, err := mem.RecallForTurn(ctx, memory.TurnRecallInput{
 			WorkspaceRoot: ws,
 			Message:       msg,
-			Agent:         p.Client,
+			Agent:         client,
 			SessionID:     sessID,
 			Limit:         5,
 			BudgetChars:   1400,
@@ -129,27 +166,12 @@ func HandleUserPromptSubmit(ctx context.Context, mem *memory.SQLiteService, wf *
 		}
 	}
 
-	if len(sections) == 0 {
-		return []byte("{}\n"), nil
-	}
-
-	additional := strings.Join(sections, "\n\n")
-	out := map[string]any{
-		"hookSpecificOutput": map[string]any{
-			"hookEventName":     "UserPromptSubmit",
-			"additionalContext": additional,
-		},
-		"additionalContext": additional,
-	}
-	raw, err := json.Marshal(out)
-	return append(raw, '\n'), err
+	return strings.Join(sections, "\n\n")
 }
 
-// HandleSessionStart injects window-capped pinned project rules and latest continuity.
-func HandleSessionStart(ctx context.Context, mem *memory.SQLiteService, wf *workflow.SQLiteService, defaultWorkspace string, stdin []byte) ([]byte, error) {
-	_, ws, sessID := parsePayload(stdin, defaultWorkspace)
+func buildSessionStartContext(ctx context.Context, mem *memory.SQLiteService, wf *workflow.SQLiteService, ws, sessID string) string {
 	if ws == "" {
-		return []byte("{}\n"), nil
+		return ""
 	}
 
 	memDir, memErr := memory.ResolveMemoryDir(ws)
@@ -157,7 +179,7 @@ func HandleSessionStart(ctx context.Context, mem *memory.SQLiteService, wf *work
 	hasMem := dbExists(memDir, memErr, "memory.db")
 	hasWF := dbExists(wfDir, wfErr, "workflow.db")
 	if !hasMem && !hasWF {
-		return []byte("{}\n"), nil
+		return ""
 	}
 
 	var sections []string
@@ -180,19 +202,7 @@ func HandleSessionStart(ctx context.Context, mem *memory.SQLiteService, wf *work
 		}
 	}
 
-	if len(sections) == 0 {
-		return []byte("{}\n"), nil
-	}
-	additional := strings.Join(sections, "\n\n")
-	out := map[string]any{
-		"hookSpecificOutput": map[string]any{
-			"hookEventName":     "SessionStart",
-			"additionalContext": additional,
-		},
-		"additionalContext": additional,
-	}
-	raw, err := json.Marshal(out)
-	return append(raw, '\n'), err
+	return strings.Join(sections, "\n\n")
 }
 
 // HandleStop performs save-guard checkpoint persistence when a host session stops

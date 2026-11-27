@@ -1,0 +1,17 @@
+{
+  "name": "jtao",
+  "displayName": "jtao Harness",
+  "version": "0.2.0",
+  "description": "Local engineering Harness for Coding Agents: persistent FTS5 memory, WorkItem DAG with real verification receipts, and detached background Solo/Team orchestration.",
+  "author": {
+    "name": "Jacob",
+    "url": "https://github.com/JacobZyy"
+  },
+  "repository": "https://github.com/JacobZyy/jtao",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "Use jtao-work to break this requirement into a verified WorkItem plan",
+    "Use jtao-solo to run the active WorkItem unattended in the background",
+    "Use jtao-team to split and run this feature concurrently with file ownership checks"
+  ]
+}

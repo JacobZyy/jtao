@@ -149,3 +149,104 @@ func TestHookSurfacesBackgroundRunStatus(t *testing.T) {
 		t.Fatalf("expected done background run surfaced on UserPromptSubmit, got err=%v out=%s", err, string(outPrompt))
 	}
 }
+
+func TestAGYHooksInjectStepsZeroPollutionAndPromptDedup(t *testing.T) {
+	ctx := context.Background()
+	ws := t.TempDir()
+	mem := memory.NewService()
+	defer mem.Close()
+	wf := workflow.NewService()
+	defer wf.Close()
+
+	// 1. Uninitialized workspace returns {} silently and creates zero .jtao/ files.
+	untouchedPayload, _ := json.Marshal(map[string]any{
+		"conversationId": "conv-agy-untouched",
+		"workspacePaths": []string{ws},
+		"lastUserInput":  "hello",
+		"hookEventName":  "PreInvocation",
+		"cwd":            ws,
+		"invocationNum":  1,
+	})
+	outEmpty, err := HandleAGYPreInvocation(ctx, mem, wf, untouchedPayload)
+	if err != nil || strings.TrimSpace(string(outEmpty)) != "{}" {
+		t.Fatalf("expected silent {} on untouched workspace, got err=%v out=%s", err, string(outEmpty))
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".jtao")); !os.IsNotExist(err) {
+		t.Fatalf("AGY hook must not pollute uninitialized workspace")
+	}
+
+	// 2. Seed pinned rule + memo -> SessionStart and PreInvocation emit Antigravity injectSteps.systemMessage.
+	if _, err := mem.PinAppend(ctx, ws, "default", "- Always run race tests."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mem.WriteMemo(ctx, memory.WriteMemoInput{
+		WorkspaceRoot: ws,
+		Text:          "Antigravity 插件必须把 hooks.json 放在插件根目录",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	startPayload, _ := json.Marshal(map[string]any{
+		"conversationId": "conv-agy-1",
+		"workspacePaths": []string{ws},
+		"hookEventName":  "SessionStart",
+		"cwd":            "/Users/demo/.gemini/config/plugins/jtao", // plugin dir must fall back to workspacePaths[0]
+	})
+	outStart, err := HandleAGYSessionStart(ctx, mem, wf, startPayload)
+	if err != nil {
+		t.Fatalf("HandleAGYSessionStart failed: %v", err)
+	}
+	var startDoc struct {
+		InjectSteps []struct {
+			SystemMessage struct {
+				SystemMessage string `json:"systemMessage"`
+			} `json:"systemMessage"`
+		} `json:"injectSteps"`
+	}
+	if err := json.Unmarshal(outStart, &startDoc); err != nil || len(startDoc.InjectSteps) != 1 || !strings.Contains(startDoc.InjectSteps[0].SystemMessage.SystemMessage, "Always run race tests.") {
+		t.Fatalf("unexpected AGY SessionStart output: %s", string(outStart))
+	}
+
+	// 3. PreInvocation fires once for a user prompt, then deduplicates tool-loop calls with identical lastUserInput.
+	convID := "conv-agy-dedup-" + time.Now().Format("150405.000000")
+	prePayload1, _ := json.Marshal(map[string]any{
+		"conversationId": convID,
+		"workspacePaths": []string{ws},
+		"lastUserInput":  "hooks.json 放哪里？",
+		"hookEventName":  "PreInvocation",
+		"cwd":            ws,
+		"invocationNum":  1,
+	})
+	outPre1, err := HandleAGYPreInvocation(ctx, mem, wf, prePayload1)
+	if err != nil || !strings.Contains(string(outPre1), "injectSteps") || !strings.Contains(string(outPre1), "hooks.json") {
+		t.Fatalf("expected AGY PreInvocation injectSteps hit on first call, got err=%v out=%s", err, string(outPre1))
+	}
+
+	// Second model call within the same tool loop (identical lastUserInput) -> silent {}.
+	prePayload2, _ := json.Marshal(map[string]any{
+		"conversationId": convID,
+		"workspacePaths": []string{ws},
+		"lastUserInput":  "hooks.json 放哪里？",
+		"hookEventName":  "PreInvocation",
+		"cwd":            ws,
+		"invocationNum":  2,
+	})
+	outPre2, err := HandleAGYPreInvocation(ctx, mem, wf, prePayload2)
+	if err != nil || strings.TrimSpace(string(outPre2)) != "{}" {
+		t.Fatalf("expected deduplicated silent {} on second invocation of same prompt, got err=%v out=%s", err, string(outPre2))
+	}
+
+	// New user prompt in the same conversation -> fires again cleanly.
+	prePayload3, _ := json.Marshal(map[string]any{
+		"conversationId": convID,
+		"workspacePaths": []string{ws},
+		"lastUserInput":  "再查一下 Antigravity hooks.json 根目录要求",
+		"hookEventName":  "PreInvocation",
+		"cwd":            ws,
+		"invocationNum":  3,
+	})
+	outPre3, err := HandleAGYPreInvocation(ctx, mem, wf, prePayload3)
+	if err != nil || !strings.Contains(string(outPre3), "injectSteps") {
+		t.Fatalf("expected new user prompt to re-trigger AGY PreInvocation, got err=%v out=%s", err, string(outPre3))
+	}
+}

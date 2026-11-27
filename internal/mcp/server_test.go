@@ -176,6 +176,9 @@ func TestResolveWSRejectsPluginCacheFallback(t *testing.T) {
 	if _, err := resolveWS("", "/Users/demo/.codex/plugins/cache/jtao/jtao/0.2.0"); err == nil {
 		t.Fatalf("expected error when fallback cwd is inside ~/.codex/plugins/ cache")
 	}
+	if _, err := resolveWS("", "/Users/demo/.gemini/config/plugins/jtao"); err == nil {
+		t.Fatalf("expected error when fallback cwd is inside ~/.gemini/config/plugins/")
+	}
 	ws, err := resolveWS("/tmp/my-project", "/Users/demo/.codex/plugins/cache/jtao/jtao/0.2.0")
 	if err != nil || ws != "/tmp/my-project" {
 		t.Fatalf("expected explicit workspace_root to override plugin cache fallback, got ws=%q err=%v", ws, err)

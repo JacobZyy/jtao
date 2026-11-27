@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "jtao": {
+      "command": "/bin/sh",
+      "args": [
+        "-c",
+        "for b in \"$HOME/.local/bin/jtao\" /opt/homebrew/bin/jtao /usr/local/bin/jtao; do if [ -x \"$b\" ]; then exec \"$b\" mcp; fi; done; exec jtao mcp"
+      ]
+    }
+  }
+}

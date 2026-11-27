@@ -75,7 +75,9 @@ func isNonProjectFallbackDir(dir string) bool {
 		}
 	}
 	slash := filepath.ToSlash(cleaned)
-	return strings.Contains(slash, "/.codex/plugins/")
+	return strings.Contains(slash, "/.codex/plugins/") ||
+		strings.Contains(slash, "/.gemini/config/plugins/") ||
+		strings.Contains(slash, "/.gemini/antigravity/")
 }
 
 // --- Memory MCP Tools ---
