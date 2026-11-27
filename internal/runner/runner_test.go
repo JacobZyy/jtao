@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -128,6 +130,78 @@ func TestResolveBinaryAndAugmentedEnvFallback(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected augmented PATH to include %s, got %v", binDir, env)
+	}
+}
+
+func TestCodexRunnerUsesSandboxFlagAndIgnoresErrorJSONOnNonZeroExit(t *testing.T) {
+	binDir := t.TempDir()
+	fakeCodex := filepath.Join(binDir, "codex")
+	script := `#!/bin/sh
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$arg" = "--full-auto" ]; then
+    echo "error: unexpected argument '--full-auto' found" >&2
+    exit 2
+  fi
+  if [ "$prev" = "--output-last-message" ]; then
+    out="$arg"
+  fi
+  prev="$arg"
+done
+if [ "${FAKE_CODEX_FAIL:-0}" = "1" ]; then
+  echo 'ERROR: {"error":{"message":"invalid_json_schema"},"status":400}' >&2
+  exit 1
+fi
+printf '{"outcome":"success","summary":"ok","selfReport":{"progressMade":true}}' > "$out"
+`
+	if err := os.WriteFile(fakeCodex, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ws := t.TempDir()
+
+	res, err := (CodexRunner{}).RunTurn(context.Background(), RunTurnInput{
+		WorkspaceRoot: ws,
+		ExecutionCwd:  ws,
+		UserPrompt:    "hello",
+		OutputSchema:  []byte(`{"type":"object"}`),
+	})
+	if err != nil {
+		t.Fatalf("RunTurn returned error: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("expected exit 0, got %d (raw=%q)", res.ExitCode, res.RawOutput)
+	}
+	if slices.Contains(res.Args, "--full-auto") {
+		t.Fatalf("did not expect deprecated --full-auto in args: %v", res.Args)
+	}
+	sandboxIdx := slices.Index(res.Args, "--sandbox")
+	if sandboxIdx < 0 || sandboxIdx+1 >= len(res.Args) || res.Args[sandboxIdx+1] != "workspace-write" {
+		t.Fatalf("expected --sandbox workspace-write in args: %v", res.Args)
+	}
+	if res.ParsedJSON == nil || res.ParsedJSON["outcome"] != "success" {
+		t.Fatalf("expected parsed JSON from --output-last-message, got %+v", res.ParsedJSON)
+	}
+
+	failRes, err := (CodexRunner{}).RunTurn(context.Background(), RunTurnInput{
+		WorkspaceRoot: ws,
+		ExecutionCwd:  ws,
+		UserPrompt:    "hello",
+		Env:           append(os.Environ(), "FAKE_CODEX_FAIL=1"),
+	})
+	if err != nil {
+		t.Fatalf("RunTurn failure path returned error: %v", err)
+	}
+	if failRes.ExitCode != 1 {
+		t.Fatalf("expected exit 1, got %d", failRes.ExitCode)
+	}
+	if failRes.ParsedJSON != nil {
+		t.Fatalf("non-zero exit must not parse stderr error JSON as turn result: %+v", failRes.ParsedJSON)
+	}
+	if !strings.Contains(failRes.RawOutput, "invalid_json_schema") {
+		t.Fatalf("expected stderr detail preserved in RawOutput, got %q", failRes.RawOutput)
 	}
 }
 

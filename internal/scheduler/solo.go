@@ -60,7 +60,7 @@ type SoloService struct {
 var soloTurnOutputSchema = []byte(`{
   "type": "object",
   "additionalProperties": false,
-  "required": ["outcome", "summary", "selfReport"],
+  "required": ["outcome", "summary", "nextAction", "evidenceRefs", "filesTouched", "selfReport"],
   "properties": {
     "outcome": { "type": "string", "enum": ["success", "noop", "blocked", "human-gate", "failed"] },
     "summary": { "type": "string" },
@@ -70,7 +70,7 @@ var soloTurnOutputSchema = []byte(`{
     "selfReport": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["progressMade"],
+      "required": ["progressMade", "blockedReason", "summary"],
       "properties": {
         "progressMade": { "type": "boolean" },
         "blockedReason": { "type": "string" },
@@ -232,9 +232,25 @@ func (s *SoloService) Resume(ctx context.Context, workspaceRoot, runID string, m
 	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, _ = markIncompleteTurnsCrashed(ctx, db, run.ID, now)
 
+	if detail, err := s.Workflow.GetWorkItem(ctx, workspaceRoot, run.WorkItemID); err == nil && detail != nil {
+		reopen := make(map[string]bool)
+		for _, n := range detail.Nodes {
+			if n.Status == workflow.NodeBlocked || n.Status == workflow.NodeFailed {
+				reopen[n.ID] = true
+			}
+		}
+		if len(reopen) > 0 {
+			if err := resetNodesForRetry(ctx, db, run.WorkItemID, reopen); err != nil {
+				return SoloRunResult{}, fmt.Errorf("reopen blocked nodes: %w", err)
+			}
+		}
+	}
+
 	run.StopRequested = false
 	run.StopReason = ""
 	run.Status = "running"
+	run.Backoff.ConsecutiveFailures = 0
+	run.Backoff.LastFailureClass = ""
 	if maxIterations > 0 && maxIterations > run.CurrentIteration {
 		run.MaxIterations = maxIterations
 	}
@@ -717,7 +733,11 @@ func interpretTurnResult(res runner.RunTurnResult, runErr error) (Outcome, strin
 	}
 	if res.ParsedJSON == nil {
 		if res.ExitCode != 0 {
-			return OutcomeInfraRetry, "runtime-error", fmt.Sprintf("agent exited with status %d without valid JSON output", res.ExitCode), SelfReport{}, nil, false
+			msg := fmt.Sprintf("agent exited with status %d without valid JSON output", res.ExitCode)
+			if excerpt := failureOutputExcerpt(res.RawOutput); excerpt != "" {
+				msg += ": " + excerpt
+			}
+			return OutcomeInfraRetry, "runtime-error", msg, SelfReport{}, nil, false
 		}
 		return OutcomeInfraRetry, "runtime-error", "agent output missing required JSON contract", SelfReport{}, nil, false
 	}
@@ -764,4 +784,28 @@ func mapOutcomeToSubmitStatus(outcome Outcome) string {
 	default:
 		return "blocked"
 	}
+}
+
+func failureOutputExcerpt(raw string) string {
+	const maxRunes = 240
+	var picked string
+	var fallback string
+	for _, line := range strings.Split(raw, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		fallback = trimmed
+		if strings.HasPrefix(strings.ToLower(trimmed), "error:") {
+			picked = trimmed
+		}
+	}
+	if picked == "" {
+		picked = fallback
+	}
+	runes := []rune(picked)
+	if len(runes) <= maxRunes {
+		return picked
+	}
+	return string(runes[:maxRunes]) + "..."
 }

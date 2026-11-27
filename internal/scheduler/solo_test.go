@@ -2,8 +2,11 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/JacobZyy/jtao/internal/memory"
@@ -209,5 +212,132 @@ func TestSoloFailClosedWhenProcessTreeSurvivesTimeout(t *testing.T) {
 	}
 	if res.Run.Status != "blocked" || res.Turns != 1 {
 		t.Fatalf("expected immediate fail-closed blocked after 1 turn, got status=%s turns=%d", res.Run.Status, res.Turns)
+	}
+}
+
+func TestOutputSchemasSatisfyStrictRequiredContract(t *testing.T) {
+	schemas := map[string][]byte{
+		"soloTurnOutputSchema": soloTurnOutputSchema,
+		"teamNodeOutputSchema": teamNodeOutputSchema,
+	}
+	var assertStrict func(t *testing.T, path string, node map[string]any)
+	assertStrict = func(t *testing.T, path string, node map[string]any) {
+		t.Helper()
+		props, _ := node["properties"].(map[string]any)
+		if node["type"] == "object" && node["additionalProperties"] == false {
+			rawReq, _ := node["required"].([]any)
+			var req []string
+			for _, item := range rawReq {
+				if key, ok := item.(string); ok {
+					req = append(req, key)
+				}
+			}
+			for key := range props {
+				if !slices.Contains(req, key) {
+					t.Errorf("%s: property %q missing from required (%v)", path, key, req)
+				}
+			}
+		}
+		for key, child := range props {
+			if childObj, ok := child.(map[string]any); ok {
+				assertStrict(t, path+"."+key, childObj)
+			}
+		}
+	}
+
+	for name, raw := range schemas {
+		var parsed map[string]any
+		if err := json.Unmarshal(raw, &parsed); err != nil {
+			t.Fatalf("%s: invalid JSON: %v", name, err)
+		}
+		assertStrict(t, name, parsed)
+	}
+}
+
+func TestNonZeroExitSurfacesFailureOutputExcerpt(t *testing.T) {
+	res := runner.RunTurnResult{
+		ExitCode:  2,
+		RawOutput: "banner line\nerror: unexpected argument '--full-auto' found\n\nUsage: codex exec",
+	}
+	outcome, _, summary, _, _, _ := interpretTurnResult(res, nil)
+	if outcome != OutcomeInfraRetry {
+		t.Fatalf("expected OutcomeInfraRetry, got %s", outcome)
+	}
+	if !strings.Contains(summary, "unexpected argument '--full-auto'") {
+		t.Fatalf("expected solo summary to include CLI error line, got %q", summary)
+	}
+
+	handoff := parseTeamNodeHandoff(res, nil)
+	if handoff.Status != "blocked" {
+		t.Fatalf("expected blocked handoff on non-zero exit, got %+v", handoff)
+	}
+	if !strings.Contains(handoff.Summary, "unexpected argument '--full-auto'") {
+		t.Fatalf("expected team handoff summary to include CLI error line, got %q", handoff.Summary)
+	}
+}
+
+func TestSoloResumeReopensBlockedNodeAndCompletes(t *testing.T) {
+	ctx := context.Background()
+	ws := t.TempDir()
+
+	wf := workflow.NewService()
+	defer wf.Close()
+	_, err := wf.CreateWorkItem(ctx, workflow.CreateWorkItemInput{
+		WorkspaceRoot: ws,
+		ID:            "resume-blocked",
+		Title:         "Resume blocked node",
+		Nodes: []workflow.TaskNode{
+			{ID: "n1", NodeKind: "plan", Title: "Plan", MaxRetries: 1},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	solo := &SoloService{Workflow: wf}
+	failingMock := &mockRunner{
+		turns: []func(context.Context, runner.RunTurnInput) (runner.RunTurnResult, error){
+			func(_ context.Context, _ runner.RunTurnInput) (runner.RunTurnResult, error) {
+				return runner.RunTurnResult{ExitCode: 2, RawOutput: "error: unexpected argument '--full-auto'"}, nil
+			},
+			func(_ context.Context, _ runner.RunTurnInput) (runner.RunTurnResult, error) {
+				return runner.RunTurnResult{ExitCode: 2, RawOutput: "error: unexpected argument '--full-auto'"}, nil
+			},
+		},
+	}
+	first, err := solo.Run(ctx, SoloRunInput{
+		WorkspaceRoot:  ws,
+		WorkItemID:     "resume-blocked",
+		MaxIterations:  5,
+		RunnerOverride: failingMock,
+	})
+	if err != nil {
+		t.Fatalf("initial Run failed: %v", err)
+	}
+	if first.Run.Status != "human-gate" {
+		t.Fatalf("expected initial run to pause in human-gate, got %s", first.Run.Status)
+	}
+
+	passingMock := &mockRunner{
+		turns: []func(context.Context, runner.RunTurnInput) (runner.RunTurnResult, error){
+			func(_ context.Context, _ runner.RunTurnInput) (runner.RunTurnResult, error) {
+				return runner.RunTurnResult{
+					ExitCode: 0,
+					ParsedJSON: map[string]any{
+						"outcome":    "success",
+						"summary":    "plan done after fix",
+						"selfReport": map[string]any{"progressMade": true},
+					},
+				}, nil
+			},
+		},
+	}
+	resumed, err := solo.Resume(ctx, ws, first.Run.ID, 5, 0, PacingConfig{}, passingMock)
+	if err != nil {
+		t.Fatalf("Resume failed: %v", err)
+	}
+	if resumed.Run.Status != "done" || resumed.Turns != 1 {
+		t.Fatalf("expected resumed run to reopen blocked node and finish done, got status=%s turns=%d note=%q",
+			resumed.Run.Status, resumed.Turns, resumed.FinalNote)
 	}
 }

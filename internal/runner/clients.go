@@ -187,7 +187,7 @@ func (CodexRunner) RunTurn(ctx context.Context, in RunTurnInput) (RunTurnResult,
 		}
 	}()
 
-	args := []string{"exec", "--skip-git-repo-check", "--full-auto"}
+	args := []string{"exec", "--skip-git-repo-check", "--sandbox", "workspace-write"}
 	lastMsgPath := ""
 
 	if len(in.OutputSchema) > 0 {
@@ -286,12 +286,15 @@ func (ClaudeRunner) RunTurn(ctx context.Context, in RunTurnInput) (RunTurnResult
 }
 
 func finalizeTurnResult(ctx context.Context, cmd string, args []string, in RunTurnInput, procRes ProcessResult, raw string) RunTurnResult {
-	parsed := ExtractJSONObject(raw)
-	// Claude --output-format json wraps the assistant text in {"result": "..."}.
-	if parsed != nil && cmd == "claude" {
-		if inner, ok := parsed["result"].(string); ok {
-			if innerObj := ExtractJSONObject(inner); innerObj != nil {
-				parsed = innerObj
+	var parsed map[string]any
+	if procRes.ExitCode == 0 {
+		parsed = ExtractJSONObject(raw)
+		// Claude --output-format json wraps the assistant text in {"result": "..."}.
+		if parsed != nil && cmd == "claude" {
+			if inner, ok := parsed["result"].(string); ok {
+				if innerObj := ExtractJSONObject(inner); innerObj != nil {
+					parsed = innerObj
+				}
 			}
 		}
 	}

@@ -99,7 +99,7 @@ type TeamService struct {
 var teamNodeOutputSchema = []byte(`{
   "type": "object",
   "additionalProperties": false,
-  "required": ["status", "summary"],
+  "required": ["status", "summary", "findings", "blockers", "filesTouched", "nextSteps", "evidenceRefs"],
   "properties": {
     "status": { "type": "string", "enum": ["pass", "blocked", "needs-input", "fail"] },
     "summary": { "type": "string" },
@@ -855,6 +855,9 @@ func parseTeamNodeHandoff(res runner.RunTurnResult, realTouched []string) *workf
 		summary := "agent output missing structured JSON handoff"
 		if res.ExitCode != 0 {
 			summary = fmt.Sprintf("agent exited with status %d", res.ExitCode)
+			if excerpt := failureOutputExcerpt(res.RawOutput); excerpt != "" {
+				summary += ": " + excerpt
+			}
 		}
 		return &workflow.NodeHandoff{Status: status, Summary: summary, Blockers: []string{summary}, FilesTouched: realTouched}
 	}
