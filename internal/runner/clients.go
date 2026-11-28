@@ -71,37 +71,100 @@ func ResolveRunner(provider string) (AgentRunner, error) {
 	}
 }
 
-// fallbackBinDirs lists standard user/package-manager binary directories that GUI apps
+// fallbackBinDirsForHome lists standard user/package-manager binary directories that GUI apps
 // (such as macOS Codex Desktop) often omit from their minimal launchd PATH.
-func fallbackBinDirs() []string {
+func fallbackBinDirsForHome(home string) []string {
 	var dirs []string
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
+	if home != "" {
 		dirs = append(dirs,
-			filepath.Join(home, ".vite-plus", "bin"),
+			filepath.Join(home, ".cargo", "bin"),
 			filepath.Join(home, ".local", "bin"),
 			filepath.Join(home, "go", "bin"),
+			filepath.Join(home, ".vite-plus", "bin"),
 			filepath.Join(home, ".volta", "bin"),
+			filepath.Join(home, ".fnm", "current", "bin"),
 			filepath.Join(home, ".npm-global", "bin"),
+			filepath.Join(home, ".bun", "bin"),
 		)
 	}
-	dirs = append(dirs, "/opt/homebrew/bin", "/usr/local/bin", "/usr/local/go/bin")
+	dirs = append(dirs,
+		"/opt/homebrew/bin",
+		"/opt/homebrew/sbin",
+		"/usr/local/bin",
+		"/usr/local/go/bin",
+	)
 	return dirs
+}
+
+func resolveHomeFromEnv(env []string) string {
+	if home := strings.TrimSpace(envLookup(env, "HOME")); home != "" {
+		return home
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return strings.TrimSpace(home)
+	}
+	return ""
+}
+
+func envLookup(env []string, key string) string {
+	prefix := key + "="
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return strings.TrimPrefix(kv, prefix)
+		}
+	}
+	return ""
+}
+
+// ResolveBinaryInEnv locates an executable by scanning the PATH inside env in order.
+// For paths containing a separator, it checks the explicit path directly.
+func ResolveBinaryInEnv(name string, env []string) (string, error) {
+	if strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("%w: empty command", exec.ErrNotFound)
+	}
+	if strings.ContainsRune(name, filepath.Separator) {
+		info, err := os.Stat(name)
+		if err != nil {
+			return "", err
+		}
+		if info.IsDir() || info.Mode()&0o111 == 0 {
+			return "", &os.PathError{Op: "exec", Path: name, Err: os.ErrPermission}
+		}
+		return name, nil
+	}
+
+	effectiveEnv := env
+	if len(effectiveEnv) == 0 {
+		effectiveEnv = BuildAugmentedEnv(nil, "")
+	}
+	pathVal := envLookup(effectiveEnv, "PATH")
+	var permDeniedPath string
+	for _, dir := range filepath.SplitList(pathVal) {
+		if dir == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, name)
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		if info.Mode()&0o111 != 0 {
+			return candidate, nil
+		}
+		if permDeniedPath == "" {
+			permDeniedPath = candidate
+		}
+	}
+	if permDeniedPath != "" {
+		return "", &os.PathError{Op: "exec", Path: permDeniedPath, Err: os.ErrPermission}
+	}
+	return "", fmt.Errorf("%w: %s", exec.ErrNotFound, name)
 }
 
 // ResolveBinary locates an executable via PATH first, then falls back to common user/Homebrew
 // bin directories so background runners launched from GUI apps still find codex/claude.
 func ResolveBinary(name string) (string, error) {
-	if p, err := exec.LookPath(name); err == nil {
-		return p, nil
-	}
-	for _, dir := range fallbackBinDirs() {
-		candidate := filepath.Join(dir, name)
-		info, err := os.Stat(candidate)
-		if err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
-			return candidate, nil
-		}
-	}
-	return "", fmt.Errorf("%s not found on PATH or standard user bin directories", name)
+	return ResolveBinaryInEnv(name, BuildAugmentedEnv(nil, ""))
 }
 
 // BuildAugmentedEnv returns an environment slice whose PATH includes extraBinDir and standard
@@ -115,7 +178,7 @@ func BuildAugmentedEnv(baseEnv []string, extraBinDir string) []string {
 	if strings.TrimSpace(extraBinDir) != "" {
 		extras = append(extras, strings.TrimSpace(extraBinDir))
 	}
-	extras = append(extras, fallbackBinDirs()...)
+	extras = append(extras, fallbackBinDirsForHome(resolveHomeFromEnv(env))...)
 
 	out := make([]string, 0, len(env)+1)
 	pathFound := false
@@ -138,17 +201,25 @@ func mergePATH(existing string, extras []string) string {
 	seen := make(map[string]bool)
 	var parts []string
 	for _, entry := range filepath.SplitList(existing) {
-		if entry != "" && !seen[entry] {
-			seen[entry] = true
+		if entry == "" {
+			continue
+		}
+		clean := filepath.Clean(entry)
+		if !seen[clean] {
+			seen[clean] = true
 			parts = append(parts, entry)
 		}
 	}
 	for _, dir := range extras {
-		if dir == "" || seen[dir] {
+		if dir == "" {
+			continue
+		}
+		clean := filepath.Clean(dir)
+		if seen[clean] {
 			continue
 		}
 		if info, err := os.Stat(dir); err == nil && info.IsDir() {
-			seen[dir] = true
+			seen[clean] = true
 			parts = append(parts, dir)
 		}
 	}
@@ -214,7 +285,8 @@ func (CodexRunner) RunTurn(ctx context.Context, in RunTurnInput) (RunTurnResult,
 	args = append(args, in.ExtraArgs...)
 	args = append(args, prompt)
 
-	binPath, err := ResolveBinary("codex")
+	env := BuildAugmentedEnv(in.Env, "")
+	binPath, err := ResolveBinaryInEnv("codex", env)
 	if err != nil {
 		return RunTurnResult{
 			ExitCode: -1,
@@ -223,7 +295,7 @@ func (CodexRunner) RunTurn(ctx context.Context, in RunTurnInput) (RunTurnResult,
 			Error:    err.Error(),
 		}, nil
 	}
-	env := BuildAugmentedEnv(in.Env, filepath.Dir(binPath))
+	env = BuildAugmentedEnv(env, filepath.Dir(binPath))
 
 	procRes := ExecProcessGroup(ctx, binPath, args, cwd, env, NormalizeTimeout(in.Timeout))
 	raw := strings.TrimSpace(procRes.Stdout + "\n" + procRes.Stderr)
@@ -266,7 +338,8 @@ func (ClaudeRunner) RunTurn(ctx context.Context, in RunTurnInput) (RunTurnResult
 	args = append(args, in.ExtraArgs...)
 	args = append(args, in.UserPrompt)
 
-	binPath, err := ResolveBinary("claude")
+	env := BuildAugmentedEnv(in.Env, "")
+	binPath, err := ResolveBinaryInEnv("claude", env)
 	if err != nil {
 		return RunTurnResult{
 			ExitCode: -1,
@@ -275,7 +348,7 @@ func (ClaudeRunner) RunTurn(ctx context.Context, in RunTurnInput) (RunTurnResult
 			Error:    err.Error(),
 		}, nil
 	}
-	env := BuildAugmentedEnv(in.Env, filepath.Dir(binPath))
+	env = BuildAugmentedEnv(env, filepath.Dir(binPath))
 
 	procRes := ExecProcessGroup(ctx, binPath, args, cwd, env, NormalizeTimeout(in.Timeout))
 	raw := strings.TrimSpace(procRes.Stdout)

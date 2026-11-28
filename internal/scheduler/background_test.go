@@ -176,3 +176,48 @@ func TestSpawnDetachedRunSurfacesImmediateFailure(t *testing.T) {
 		t.Fatalf("expected immediate failure surfaced with log excerpt, got err=%v", err)
 	}
 }
+
+func TestSpawnDetachedRunPreservesHostPathAndAppendsHomeCargo(t *testing.T) {
+	ctx := context.Background()
+	ws := t.TempDir()
+	wf := workflow.NewService()
+	defer wf.Close()
+
+	fakeHome := t.TempDir()
+	cargoDir := filepath.Join(fakeHome, ".cargo", "bin")
+	if err := os.MkdirAll(cargoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hostDir := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("PATH", hostDir+":/usr/bin:/bin")
+
+	outFile := filepath.Join(t.TempDir(), "worker-path.txt")
+	probeBin := filepath.Join(t.TempDir(), "probe-jtao.sh")
+	script := "#!/bin/sh\nprintf '%s' \"$PATH\" > " + outFile + "\n"
+	if err := os.WriteFile(probeBin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := spawnDetachedRun(ctx, wf, ws, probeBin, "run:solo:path-probe", "wi-path", "solo", "codex", nil, false); err != nil {
+		t.Fatalf("spawnDetachedRun failed: %v", err)
+	}
+	raw, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read worker PATH output: %v", err)
+	}
+	parts := filepath.SplitList(string(raw))
+	if len(parts) < 4 || parts[0] != hostDir || parts[1] != "/usr/bin" || parts[2] != "/bin" {
+		t.Fatalf("expected host PATH order preserved in detached worker, got %v", parts)
+	}
+	hasCargo := false
+	for _, p := range parts {
+		if p == cargoDir {
+			hasCargo = true
+			break
+		}
+	}
+	if !hasCargo {
+		t.Fatalf("expected detached worker PATH to include %s, got %v", cargoDir, parts)
+	}
+}

@@ -553,7 +553,7 @@ func (s *SQLiteService) SubmitNodeResult(ctx context.Context, in SubmitNodeResul
 
 	evidence := collectUniqueRefs(in.ReceiptID, in.EvidenceRefs, in.Handoff)
 	for _, ref := range evidence {
-		if err := validateEvidenceRef(ref); err != nil {
+		if err := ValidateEvidenceRef(ref); err != nil {
 			return AdvanceNodeResult{}, err
 		}
 	}
@@ -594,6 +594,11 @@ func (s *SQLiteService) SubmitNodeResult(ctx context.Context, in SubmitNodeResul
 			return AdvanceNodeResult{}, err
 		}
 		if !ver.OK {
+			// Command failed to start (e.g. executable not found, permission denied, invalid cwd) ->
+			// environment/configuration blocker; fail-closed immediately without burning agent retries.
+			if ver.Receipt != nil && strings.TrimSpace(ver.Receipt.ExecError) != "" {
+				return s.commitNodeTransition(ctx, in.WorkspaceRoot, detail, node, NodeBlocked, node.RetryCount, evidence, in.Handoff, DecisionBlocked, "verification environment error: "+ver.Reason)
+			}
 			// Command ran validly but failed exit code -> retry within budget, else human-gate.
 			if ver.Receipt != nil && ver.Receipt.Command == node.VerifySpec.Command && ver.Receipt.ExitCode != node.VerifySpec.ExpectedExitCode {
 				nextRetry := node.RetryCount + 1
@@ -698,7 +703,7 @@ func (s *SQLiteService) commitNodeTransition(
 
 // AddEvidence attaches a verified reference to a specific task node.
 func (s *SQLiteService) AddEvidence(ctx context.Context, workspaceRoot, workItemID, nodeID, ref string) error {
-	if err := validateEvidenceRef(ref); err != nil {
+	if err := ValidateEvidenceRef(ref); err != nil {
 		return err
 	}
 	detail, err := s.GetWorkItem(ctx, workspaceRoot, workItemID)
@@ -762,7 +767,9 @@ func (s *SQLiteService) EvaluateDoneGate(ctx context.Context, workspaceRoot, wor
 	return res, nil
 }
 
-func validateEvidenceRef(ref string) error {
+// ValidateEvidenceRef checks that ref uses a valid ASCII scheme:value format
+// and is not empty or a known placeholder.
+func ValidateEvidenceRef(ref string) error {
 	trimmed := strings.TrimSpace(ref)
 	if trimmed == "" {
 		return fmt.Errorf("evidence ref cannot be empty")
@@ -771,6 +778,11 @@ func validateEvidenceRef(ref string) error {
 		return fmt.Errorf("invalid or placeholder evidence ref %q: must use scheme:value format", ref)
 	}
 	return nil
+}
+
+// IsPlaceholderEvidenceRef reports whether ref matches known placeholder/forged patterns.
+func IsPlaceholderEvidenceRef(ref string) bool {
+	return placeholderRefRegex.MatchString(strings.TrimSpace(ref))
 }
 
 func readyNodesFromDetail(d WorkItemDetail) []TaskNode {

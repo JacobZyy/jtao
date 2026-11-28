@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -242,5 +243,105 @@ func TestWorkItemReceiptGatedProgressionAndMarkdownProjection(t *testing.T) {
 	gate, err := svc.EvaluateDoneGate(ctx, ws, detail.ID)
 	if err != nil || !gate.OK || gate.NodesDone != 2 {
 		t.Fatalf("expected passing DoneGate, got err=%v gate=%+v", err, gate)
+	}
+}
+
+func TestReceiptExecErrorMigrationAndImmediateBlock(t *testing.T) {
+	ctx := context.Background()
+	ws := t.TempDir()
+
+	// Seed a legacy workflow.db whose execution_receipts table predates the exec_error column.
+	wfDir := filepath.Join(ws, ".jtao", "workflow")
+	if err := os.MkdirAll(filepath.Join(wfDir, "receipts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyDB, err := sql.Open("sqlite", filepath.Join(wfDir, "workflow.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacyDB.ExecContext(ctx, `
+		CREATE TABLE execution_receipts (
+			id TEXT PRIMARY KEY,
+			work_item_id TEXT NOT NULL DEFAULT '',
+			node_id TEXT NOT NULL DEFAULT '',
+			run_id TEXT NOT NULL DEFAULT '',
+			command TEXT NOT NULL,
+			args_json TEXT NOT NULL,
+			cwd TEXT NOT NULL,
+			exit_code INTEGER NOT NULL,
+			timed_out INTEGER NOT NULL DEFAULT 0,
+			duration_ms INTEGER NOT NULL DEFAULT 0,
+			stdout_sha256 TEXT NOT NULL DEFAULT '',
+			stderr_sha256 TEXT NOT NULL DEFAULT '',
+			output_excerpt TEXT NOT NULL DEFAULT '',
+			artifact_ref TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		);
+	`); err != nil {
+		_ = legacyDB.Close()
+		t.Fatal(err)
+	}
+	_ = legacyDB.Close()
+
+	svc := NewService()
+	defer svc.Close()
+
+	spec := &VerifyCommandSpec{Command: "cargo", Args: []string{"test"}, ExpectedExitCode: 0}
+	detail, err := svc.CreateWorkItem(ctx, CreateWorkItemInput{
+		WorkspaceRoot: ws,
+		ID:            "env-err-check",
+		Title:         "Env error check",
+		Nodes: []TaskNode{
+			{ID: "n1", Title: "Run cargo", CanEditFiles: true, MaxRetries: 2, VerifySpec: spec},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkItem failed: %v", err)
+	}
+	claim, err := svc.ClaimNode(ctx, ws, detail.ID, "n1")
+	if err != nil || claim == nil {
+		t.Fatalf("ClaimNode failed: %v", err)
+	}
+
+	rec, err := svc.RecordReceipt(ctx, ws, ExecutionReceipt{
+		WorkItemID:    detail.ID,
+		NodeID:        "n1",
+		Command:       "cargo",
+		Args:          []string{"test"},
+		Cwd:           ws,
+		ExitCode:      -1,
+		OutputExcerpt: `verify command "cargo" not found in PATH`,
+		ExecError:     `verify command "cargo" not found in PATH`,
+	})
+	if err != nil {
+		t.Fatalf("RecordReceipt after legacy migration failed: %v", err)
+	}
+
+	loaded, err := svc.GetReceipt(ctx, ws, rec.ID)
+	if err != nil || loaded == nil || loaded.ExecError != `verify command "cargo" not found in PATH` {
+		t.Fatalf("expected round-tripped ExecError, got err=%v rec=%+v", err, loaded)
+	}
+
+	ver, err := svc.VerifyReceipt(ctx, ws, rec.ID, *spec)
+	if err != nil || ver.OK || !strings.Contains(ver.Reason, "not found") || strings.Contains(ver.Reason, "expected 0, got -1") {
+		t.Fatalf("expected VerifyReceipt to surface ExecError without exit-code mismatch noise, got err=%v ver=%+v", err, ver)
+	}
+
+	adv, err := svc.SubmitNodeResult(ctx, SubmitNodeResultInput{
+		WorkspaceRoot:  ws,
+		WorkItemID:     detail.ID,
+		NodeID:         "n1",
+		ExecutionToken: claim.ExecutionToken,
+		Status:         "pass",
+		ReceiptID:      rec.ID,
+	})
+	if err != nil {
+		t.Fatalf("SubmitNodeResult failed: %v", err)
+	}
+	if adv.Decision != DecisionBlocked || adv.Node.Status != NodeBlocked || adv.Node.RetryCount != 0 {
+		t.Fatalf("expected immediate DecisionBlocked with 0 retries consumed, got %+v", adv)
+	}
+	if !strings.Contains(adv.Reason, "not found") {
+		t.Fatalf("expected SubmitNodeResult reason to include not found detail, got %q", adv.Reason)
 	}
 }

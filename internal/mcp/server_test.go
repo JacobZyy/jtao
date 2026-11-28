@@ -3,11 +3,15 @@ package jtaomcp
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/JacobZyy/jtao/internal/memory"
+	"github.com/JacobZyy/jtao/internal/runner"
 	"github.com/JacobZyy/jtao/internal/workflow"
 )
 
@@ -182,5 +186,83 @@ func TestResolveWSRejectsPluginCacheFallback(t *testing.T) {
 	ws, err := resolveWS("/tmp/my-project", "/Users/demo/.codex/plugins/cache/jtao/jtao/0.2.0")
 	if err != nil || ws != "/tmp/my-project" {
 		t.Fatalf("expected explicit workspace_root to override plugin cache fallback, got ws=%q err=%v", ws, err)
+	}
+}
+
+func TestMCPWorkflowReceiptRunFallbackPATHAndNotFoundError(t *testing.T) {
+	ctx := context.Background()
+	ws := t.TempDir()
+	fakeHome := t.TempDir()
+	cargoDir := filepath.Join(fakeHome, ".cargo", "bin")
+	if err := os.MkdirAll(cargoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cargoDir, "cargo"), []byte("#!/bin/sh\necho mcp-cargo-ok\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("PATH", "/usr/bin:/bin")
+
+	mem := memory.NewService()
+	defer mem.Close()
+	wf := workflow.NewService()
+	defer wf.Close()
+
+	srv := NewServer(Config{DefaultWorkspace: ws, Memory: mem, Workflow: wf})
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := srv.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	// 1. Minimal PATH finds cargo under simulated $HOME/.cargo/bin and returns exitCode=0.
+	okRes, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "workflow_receipt_run",
+		Arguments: map[string]any{
+			"command": "cargo",
+			"args":    []string{"--version"},
+		},
+	})
+	if err != nil || okRes.IsError {
+		t.Fatalf("workflow_receipt_run cargo failed: err=%v res=%+v", err, okRes)
+	}
+	okBytes, _ := json.Marshal(okRes.StructuredContent)
+	var okOut runner.ReceiptExecOutput
+	if err := json.Unmarshal(okBytes, &okOut); err != nil {
+		t.Fatalf("unmarshal okOut: %v", err)
+	}
+	if okOut.Record.ExitCode != 0 || okOut.Record.ExecError != "" || !strings.Contains(okOut.Record.OutputExcerpt, "mcp-cargo-ok") {
+		t.Fatalf("expected exit 0 from $HOME/.cargo/bin/cargo, got %+v", okOut)
+	}
+
+	// 2. Missing command persists ExecError with not found detail.
+	missRes, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "workflow_receipt_run",
+		Arguments: map[string]any{
+			"command": "jtao-nonexistent-mcp-cmd",
+		},
+	})
+	if err != nil || missRes.IsError {
+		t.Fatalf("workflow_receipt_run missing failed: err=%v res=%+v", err, missRes)
+	}
+	missBytes, _ := json.Marshal(missRes.StructuredContent)
+	var missOut runner.ReceiptExecOutput
+	if err := json.Unmarshal(missBytes, &missOut); err != nil {
+		t.Fatalf("unmarshal missOut: %v", err)
+	}
+	if missOut.Record.ExitCode != -1 || !strings.Contains(missOut.Record.ExecError, "not found") {
+		t.Fatalf("expected ExecError containing not found, got %+v", missOut)
+	}
+	stored, err := wf.GetReceipt(ctx, ws, missOut.ReceiptID)
+	if err != nil || stored == nil || !strings.Contains(stored.ExecError, "not found") {
+		t.Fatalf("expected persisted receipt with ExecError, got err=%v stored=%+v", err, stored)
 	}
 }

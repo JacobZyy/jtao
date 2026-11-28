@@ -115,9 +115,44 @@ func (s *SQLiteService) openDB(ctx context.Context, workspaceRoot string) (*sql.
 		_ = db.Close()
 		return nil, "", fmt.Errorf("init workflow schema: %w", err)
 	}
+	if err := ensureReceiptExecErrorColumn(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, "", fmt.Errorf("migrate execution_receipts schema: %w", err)
+	}
 
 	s.dbs[dbPath] = db
 	return db, wfDir, nil
+}
+
+func ensureReceiptExecErrorColumn(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(execution_receipts)`)
+	if err != nil {
+		return err
+	}
+	hasExecError := false
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if name == "exec_error" {
+			hasExecError = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+	if hasExecError {
+		return nil
+	}
+	_, err = db.ExecContext(ctx, `ALTER TABLE execution_receipts ADD COLUMN exec_error TEXT NOT NULL DEFAULT ''`)
+	return err
 }
 
 func (s *SQLiteService) nowISO() string {
@@ -220,6 +255,7 @@ CREATE TABLE IF NOT EXISTS execution_receipts (
   stderr_sha256  TEXT NOT NULL DEFAULT '',
   output_excerpt TEXT NOT NULL DEFAULT '',
   artifact_ref   TEXT NOT NULL DEFAULT '',
+  exec_error     TEXT NOT NULL DEFAULT '',
   created_at     TEXT NOT NULL
 );
 

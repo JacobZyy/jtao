@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -65,7 +66,14 @@ var soloTurnOutputSchema = []byte(`{
     "outcome": { "type": "string", "enum": ["success", "noop", "blocked", "human-gate", "failed"] },
     "summary": { "type": "string" },
     "nextAction": { "type": "string" },
-    "evidenceRefs": { "type": "array", "items": { "type": "string" } },
+    "evidenceRefs": {
+      "type": "array",
+      "description": "Strict ASCII scheme:value evidence references only (e.g. file:path/to/file, receipt:<id>, artifact:<id>). Never include natural language, command execution summaries, Chinese fullwidth colons (：), or placeholders; omit verifySpec receipts because the runner injects them automatically.",
+      "items": {
+        "type": "string",
+        "description": "Strict ASCII scheme:value reference (e.g. file:path/to/file, receipt:<id>); never free text or command output."
+      }
+    },
     "filesTouched": { "type": "array", "items": { "type": "string" } },
     "selfReport": {
       "type": "object",
@@ -337,6 +345,7 @@ func (s *SoloService) executeLoop(ctx context.Context, workspaceRoot string, run
 				StderrSHA256:  rec.StderrSHA256,
 				OutputExcerpt: rec.OutputExcerpt,
 				ArtifactRef:   rec.ArtifactRef,
+				ExecError:     rec.ExecError,
 			})
 			if err != nil {
 				return "", err
@@ -454,7 +463,7 @@ func (s *SoloService) executeLoop(ctx context.Context, workspaceRoot string, run
 		})
 
 		// 4. Evaluate process safety guards first (fail-closed on surviving process trees).
-		outcome, failureClass, summary, selfReport, refs, shouldStop := interpretTurnResult(turnRes, runErr)
+		outcome, failureClass, summary, selfReport, agentRefs, shouldStop := interpretTurnResult(turnRes, runErr)
 		var receiptIDs []string
 
 		// Code-level seal for safe_bypass: a read-only probe turn can NEVER claim material progress or advance the DAG.
@@ -469,10 +478,11 @@ func (s *SoloService) executeLoop(ctx context.Context, workspaceRoot string, run
 			shouldStop = true
 		}
 
+		var verifyExecErr string
 		if outcome == OutcomeSuccess && claimed.Node.VerifySpec != nil {
 			verifyCwd := execCwd
-			if claimed.Node.VerifySpec.CwdRel != "" {
-				verifyCwd = execCwd + "/" + claimed.Node.VerifySpec.CwdRel
+			if rel := strings.TrimSpace(claimed.Node.VerifySpec.CwdRel); rel != "" {
+				verifyCwd = filepath.Join(execCwd, rel)
 			}
 			recOut, recErr := receiptExec.RunAndRecord(ctx, runner.ReceiptExecInput{
 				WorkspaceRoot: workspaceRoot,
@@ -491,18 +501,40 @@ func (s *SoloService) executeLoop(ctx context.Context, workspaceRoot string, run
 				shouldStop = true
 			} else {
 				receiptIDs = append(receiptIDs, recOut.ReceiptID)
-				refs = append(refs, recOut.ReceiptID)
+				verifyExecErr = recOut.Record.ExecError
 			}
 		}
 
 		// 5. Submit node result into Workflow DAG using sealed executionToken + real receipt.
 		// Noop polls and safe_bypass read-only probes do NOT consume DAG retries.
 		var advResult *workflow.AdvanceNodeResult
+		var turnHandoff *workflow.NodeHandoff
 		if !bypassWasActive && outcome != OutcomeStopped && outcome != OutcomeNoop && !(turnRes.TimedOut && turnRes.TreeAlive) {
 			submitStatus := mapOutcomeToSubmitStatus(outcome)
 			receiptID := ""
 			if len(receiptIDs) > 0 {
 				receiptID = receiptIDs[0]
+			}
+			sanitized := sanitizeEvidenceRefsForSubmit(agentRefs, receiptIDs)
+			var findings []string
+			if note := recordDroppedEvidenceRefs(claimed.Node.ID, sanitized.DroppedFreeText); note != "" {
+				findings = append(findings, note)
+			}
+			var blockers []string
+			handoffStatus := submitStatus
+			handoffSummary := summary
+			if verifyExecErr != "" {
+				envReason := "verification environment error: " + verifyExecErr
+				handoffStatus = "blocked"
+				handoffSummary = envReason
+				blockers = append(blockers, envReason)
+			}
+			turnHandoff = &workflow.NodeHandoff{
+				Status:       handoffStatus,
+				Summary:      handoffSummary,
+				Findings:     findings,
+				Blockers:     blockers,
+				EvidenceRefs: sanitized.Refs,
 			}
 			adv, advErr := s.Workflow.SubmitNodeResult(ctx, workflow.SubmitNodeResultInput{
 				WorkspaceRoot:  workspaceRoot,
@@ -510,14 +542,10 @@ func (s *SoloService) executeLoop(ctx context.Context, workspaceRoot string, run
 				NodeID:         claimed.Node.ID,
 				ExecutionToken: claimed.ExecutionToken,
 				Status:         submitStatus,
-				Summary:        summary,
+				Summary:        handoffSummary,
 				ReceiptID:      receiptID,
-				EvidenceRefs:   refs,
-				Handoff: &workflow.NodeHandoff{
-					Status:       submitStatus,
-					Summary:      summary,
-					EvidenceRefs: refs,
-				},
+				EvidenceRefs:   sanitized.Refs,
+				Handoff:        turnHandoff,
 			})
 			if advErr != nil {
 				outcome = OutcomeBlocked
@@ -537,10 +565,15 @@ func (s *SoloService) executeLoop(ctx context.Context, workspaceRoot string, run
 				case workflow.DecisionHumanGate:
 					outcome = OutcomeHumanGate
 					shouldStop = true
+					summary = adv.Reason
 					finalNote = adv.Reason
 				case workflow.DecisionBlocked:
 					outcome = OutcomeBlocked
+					if verifyExecErr != "" {
+						failureClass = "environment-error"
+					}
 					shouldStop = true
+					summary = adv.Reason
 					finalNote = adv.Reason
 				}
 			}
@@ -590,6 +623,7 @@ func (s *SoloService) executeLoop(ctx context.Context, workspaceRoot string, run
 		turn.Material = material
 		turn.OutputRef = turnRes.OutputArtifactRef
 		turn.ReceiptIDs = receiptIDs
+		turn.Handoff = turnHandoff
 		turn.ElapsedMs = turnRes.ElapsedMs
 		turn.FinishedAt = s.now().UTC().Format(time.RFC3339Nano)
 		_ = recordTurnFinish(persistCtx, db, turn)
@@ -715,6 +749,7 @@ func buildSoloTurnPrompt(node workflow.TaskNode, iteration int, recalled string,
 		b.WriteString("\n" + recalled + "\n")
 	}
 	b.WriteString("\nReturn a single JSON object matching the required turn schema with `outcome`, `summary`, and `selfReport.progressMade`.\n")
+	b.WriteString(evidenceRefsPromptRule + "\n")
 	return b.String()
 }
 
@@ -760,14 +795,7 @@ func interpretTurnResult(res runner.RunTurnResult, runErr error) (Outcome, strin
 		report.Summary, _ = sr["summary"].(string)
 	}
 
-	var refs []string
-	if rawRefs, ok := res.ParsedJSON["evidenceRefs"].([]any); ok {
-		for _, item := range rawRefs {
-			if str, ok := item.(string); ok && strings.TrimSpace(str) != "" {
-				refs = append(refs, strings.TrimSpace(str))
-			}
-		}
-	}
+	refs := stringSliceField(res.ParsedJSON, "evidenceRefs")
 
 	shouldStop := TurnConsequences[outcome].StopByDefault
 	return outcome, "", summary, report, refs, shouldStop

@@ -133,6 +133,155 @@ func TestResolveBinaryAndAugmentedEnvFallback(t *testing.T) {
 	}
 }
 
+func TestReceiptExecutorResolvesCargoFromHomeFallbackAndPreservesPathPriority(t *testing.T) {
+	ctx := context.Background()
+	ws := t.TempDir()
+	fakeHome := t.TempDir()
+	cargoDir := filepath.Join(fakeHome, ".cargo", "bin")
+	fnmDir := filepath.Join(fakeHome, ".fnm", "current", "bin")
+	for _, dir := range []string{cargoDir, fnmDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fakeCargo := filepath.Join(cargoDir, "cargo")
+	if err := os.WriteFile(fakeCargo, []byte("#!/bin/sh\necho cargo-from-home\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("PATH", "/usr/bin:/bin")
+
+	var captured ReceiptRecord
+	exec := ReceiptExecutor{
+		Sink: func(_ context.Context, _ string, rec ReceiptRecord) (string, error) {
+			captured = rec
+			return "receipt:cargo-home", nil
+		},
+	}
+
+	out, err := exec.RunAndRecord(ctx, ReceiptExecInput{
+		WorkspaceRoot: ws,
+		ExecutionCwd:  ws,
+		WorkItemID:    "wi-cargo",
+		NodeID:        "n1",
+		Command:       "cargo",
+		Args:          []string{"--version"},
+	})
+	if err != nil {
+		t.Fatalf("RunAndRecord failed: %v", err)
+	}
+	if out.Record.ExitCode != 0 || captured.ExecError != "" || !strings.Contains(captured.OutputExcerpt, "cargo-from-home") {
+		t.Fatalf("expected cargo resolved from $HOME/.cargo/bin with exit 0, got rec=%+v", captured)
+	}
+
+	// Original PATH priority must win over fallback dirs and stay deduplicated.
+	customDir := t.TempDir()
+	customCargo := filepath.Join(customDir, "cargo")
+	if err := os.WriteFile(customCargo, []byte("#!/bin/sh\necho cargo-from-custom\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outCustom, err := exec.RunAndRecord(ctx, ReceiptExecInput{
+		WorkspaceRoot: ws,
+		ExecutionCwd:  ws,
+		Command:       "cargo",
+		Env:           []string{"HOME=" + fakeHome, "PATH=" + customDir + ":/usr/bin:/bin:" + cargoDir},
+	})
+	if err != nil {
+		t.Fatalf("RunAndRecord custom PATH failed: %v", err)
+	}
+	if outCustom.Record.ExitCode != 0 || !strings.Contains(outCustom.Record.OutputExcerpt, "cargo-from-custom") {
+		t.Fatalf("expected existing PATH entry to take precedence over fallback, got %+v", outCustom.Record)
+	}
+
+	aug := BuildAugmentedEnv([]string{"HOME=" + fakeHome, "PATH=/usr/bin:/bin:" + cargoDir}, "")
+	pathVal := envLookup(aug, "PATH")
+	parts := filepath.SplitList(pathVal)
+	if len(parts) < 4 || parts[0] != "/usr/bin" || parts[1] != "/bin" || parts[2] != cargoDir {
+		t.Fatalf("expected original PATH prefix preserved, got %v", parts)
+	}
+	cargoCount := 0
+	for _, p := range parts {
+		if p == cargoDir {
+			cargoCount++
+		}
+	}
+	if cargoCount != 1 {
+		t.Fatalf("expected %s deduplicated in PATH, got %v", cargoDir, parts)
+	}
+	if !slices.Contains(parts, fnmDir) {
+		t.Fatalf("expected %s appended to PATH, got %v", fnmDir, parts)
+	}
+}
+
+func TestReceiptExecutorRecordsStartupErrors(t *testing.T) {
+	ctx := context.Background()
+	ws := t.TempDir()
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("PATH", "/usr/bin:/bin")
+
+	var captured ReceiptRecord
+	exec := ReceiptExecutor{
+		Sink: func(_ context.Context, _ string, rec ReceiptRecord) (string, error) {
+			captured = rec
+			return "receipt:err-1", nil
+		},
+	}
+
+	// 1. Command not found in PATH.
+	outMissing, err := exec.RunAndRecord(ctx, ReceiptExecInput{
+		WorkspaceRoot: ws,
+		ExecutionCwd:  ws,
+		Command:       "jtao-definitely-missing-cmd",
+		Args:          []string{"test"},
+	})
+	if err != nil {
+		t.Fatalf("RunAndRecord should persist failed receipt without error, got %v", err)
+	}
+	if outMissing.Record.ExitCode != -1 || !outMissing.Result.StartFailed {
+		t.Fatalf("expected exitCode=-1 and StartFailed=true, got rec=%+v res=%+v", outMissing.Record, outMissing.Result)
+	}
+	if !strings.Contains(captured.ExecError, "not found") || !strings.Contains(captured.ExecError, "jtao-definitely-missing-cmd") {
+		t.Fatalf("expected ExecError to report command not found, got %q", captured.ExecError)
+	}
+	if !strings.Contains(captured.OutputExcerpt, "not found") || captured.StderrSHA256 == hashText("") {
+		t.Fatalf("expected non-empty error excerpt and stderr hash, got excerpt=%q sha=%q", captured.OutputExcerpt, captured.StderrSHA256)
+	}
+
+	// 2. Nonexistent working directory.
+	missingCwd := filepath.Join(ws, "does-not-exist")
+	outCwd, err := exec.RunAndRecord(ctx, ReceiptExecInput{
+		WorkspaceRoot: ws,
+		ExecutionCwd:  missingCwd,
+		Command:       "sh",
+		Args:          []string{"-c", "echo hi"},
+	})
+	if err != nil {
+		t.Fatalf("RunAndRecord missing cwd failed: %v", err)
+	}
+	if outCwd.Record.ExitCode != -1 || !strings.Contains(outCwd.Record.ExecError, "working directory") {
+		t.Fatalf("expected working directory error, got %+v", outCwd.Record)
+	}
+
+	// 3. Non-executable file (permission denied).
+	noExec := filepath.Join(ws, "not-exec.sh")
+	if err := os.WriteFile(noExec, []byte("#!/bin/sh\necho hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outPerm, err := exec.RunAndRecord(ctx, ReceiptExecInput{
+		WorkspaceRoot: ws,
+		ExecutionCwd:  ws,
+		Command:       noExec,
+	})
+	if err != nil {
+		t.Fatalf("RunAndRecord permission denied failed: %v", err)
+	}
+	if outPerm.Record.ExitCode != -1 || !strings.Contains(outPerm.Record.ExecError, "permission denied") {
+		t.Fatalf("expected permission denied error, got %+v", outPerm.Record)
+	}
+}
+
 func TestCodexRunnerUsesSandboxFlagAndIgnoresErrorJSONOnNonZeroExit(t *testing.T) {
 	binDir := t.TempDir()
 	fakeCodex := filepath.Join(binDir, "codex")

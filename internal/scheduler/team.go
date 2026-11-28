@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -107,7 +108,14 @@ var teamNodeOutputSchema = []byte(`{
     "blockers": { "type": "array", "items": { "type": "string" } },
     "filesTouched": { "type": "array", "items": { "type": "string" } },
     "nextSteps": { "type": "array", "items": { "type": "string" } },
-    "evidenceRefs": { "type": "array", "items": { "type": "string" } }
+    "evidenceRefs": {
+      "type": "array",
+      "description": "Strict ASCII scheme:value evidence references only (e.g. file:path/to/file, receipt:<id>, artifact:<id>). Never include natural language, command execution summaries, Chinese fullwidth colons (：), or placeholders; omit verifySpec receipts because the runner injects them automatically.",
+      "items": {
+        "type": "string",
+        "description": "Strict ASCII scheme:value reference (e.g. file:path/to/file, receipt:<id>); never free text or command output."
+      }
+    }
   }
 }`)
 
@@ -490,8 +498,19 @@ func (s *TeamService) runWithSeeds(ctx context.Context, in TeamRunInput, seeds m
 		run.Status = "done"
 		run.SummaryText = fmt.Sprintf("team DAG completed cleanly (%d nodes, %d seeded)", len(nodeRuns), seededCount)
 	} else {
+		var details []string
+		for _, nr := range nodeRuns {
+			if nr.Status != "blocked" && nr.Status != "failed" {
+				continue
+			}
+			if reason := strings.TrimSpace(nr.Reason); reason != "" {
+				details = append(details, fmt.Sprintf("%s (%s)", nr.NodeID, reason))
+			} else {
+				details = append(details, nr.NodeID)
+			}
+		}
 		run.Status = "blocked"
-		run.SummaryText = fmt.Sprintf("team DAG blocked on node(s): %s", strings.Join(blockedIDs, ", "))
+		run.SummaryText = fmt.Sprintf("team DAG blocked on node(s): %s", strings.Join(details, "; "))
 	}
 	run.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	_ = updateRun(persistCtx, db, run)
@@ -562,7 +581,7 @@ func (s *TeamService) executeTeamNode(
 	_ = recordTurnStart(ctx, db, turn)
 	claimMu.Unlock()
 
-	finishAndSubmit := func(status, submitStatus, reason string, handoff *workflow.NodeHandoff, filesTouched, receiptIDs []string, outcome Outcome) TeamNodeRun {
+	finishAndSubmit := func(status, submitStatus, reason string, handoff *workflow.NodeHandoff, filesTouched, receiptIDs []string, outcome Outcome, failureClass string) TeamNodeRun {
 		base.Status = status
 		base.Reason = reason
 		base.Handoff = handoff
@@ -574,17 +593,24 @@ func (s *TeamService) executeTeamNode(
 		if len(receiptIDs) > 0 {
 			receiptID = receiptIDs[0]
 		}
-		var refs []string
-		refs = append(refs, receiptIDs...)
+		var agentRefs []string
 		if handoff != nil {
-			refs = append(refs, handoff.EvidenceRefs...)
+			agentRefs = handoff.EvidenceRefs
+		}
+		sanitized := sanitizeEvidenceRefsForSubmit(agentRefs, receiptIDs)
+		refs := sanitized.Refs
+		if note := recordDroppedEvidenceRefs(node.ID, sanitized.DroppedFreeText); note != "" && handoff != nil {
+			handoff.Findings = append(handoff.Findings, note)
+		}
+		if handoff != nil {
+			handoff.EvidenceRefs = refs
 		}
 		if len(refs) == 0 && submitStatus == "pass" {
 			refs = []string{"note:team-" + node.ID}
 		}
 
 		claimMu.Lock()
-		_, _ = s.Workflow.SubmitNodeResult(ctx, workflow.SubmitNodeResultInput{
+		_, advErr := s.Workflow.SubmitNodeResult(ctx, workflow.SubmitNodeResultInput{
 			WorkspaceRoot:  in.WorkspaceRoot,
 			WorkItemID:     in.WorkItemID,
 			NodeID:         node.ID,
@@ -595,8 +621,20 @@ func (s *TeamService) executeTeamNode(
 			EvidenceRefs:   refs,
 			Handoff:        handoff,
 		})
+		if advErr != nil {
+			rejectReason := fmt.Sprintf("workflow submit rejected: %v", advErr)
+			base.Status = "blocked"
+			base.Reason = rejectReason
+			outcome = OutcomeBlocked
+			failureClass = "runtime-error"
+			if handoff != nil {
+				handoff.Status = "blocked"
+				handoff.Blockers = append(handoff.Blockers, rejectReason)
+			}
+		}
 		turn.PhaseState = "completed"
 		turn.Outcome = outcome
+		turn.FailureClass = DeriveFailureClass(outcome, failureClass)
 		turn.Material = outcome == OutcomeSuccess
 		turn.ReceiptIDs = receiptIDs
 		turn.FilesTouched = filesTouched
@@ -621,9 +659,9 @@ func (s *TeamService) executeTeamNode(
 		}
 		if !gate.OK {
 			handoff.Blockers = []string{gate.Question}
-			return finishAndSubmit("blocked", "blocked", gate.Question, handoff, gate.TouchedFiles, nil, OutcomeBlocked)
+			return finishAndSubmit("blocked", "blocked", gate.Question, handoff, gate.TouchedFiles, nil, OutcomeBlocked, "ownership-gate")
 		}
-		return finishAndSubmit("done", "pass", "merge gate passed", handoff, gate.TouchedFiles, nil, OutcomeSuccess)
+		return finishAndSubmit("done", "pass", "merge gate passed", handoff, gate.TouchedFiles, nil, OutcomeSuccess, "")
 	}
 
 	// 2. Cascade block if any upstream dependency failed or blocked.
@@ -631,7 +669,7 @@ func (s *TeamService) executeTeamNode(
 		if dep.Status == "blocked" || dep.Status == "failed" {
 			msg := fmt.Sprintf("blocked by upstream dependency %s (%s)", dep.NodeID, dep.Status)
 			handoff := &workflow.NodeHandoff{Status: "blocked", Summary: msg, Blockers: []string{msg}}
-			return finishAndSubmit("blocked", "blocked", msg, handoff, nil, nil, OutcomeBlocked)
+			return finishAndSubmit("blocked", "blocked", msg, handoff, nil, nil, OutcomeBlocked, "")
 		}
 	}
 
@@ -643,7 +681,7 @@ func (s *TeamService) executeTeamNode(
 			Summary:  "Auto-completed read-only review: upstream produced no file changes.",
 			Findings: []string{"no-upstream-file-changes"},
 		}
-		return finishAndSubmit("done", "pass", "no-upstream-file-changes", handoff, nil, nil, OutcomeSuccess)
+		return finishAndSubmit("done", "pass", "no-upstream-file-changes", handoff, nil, nil, OutcomeSuccess, "")
 	}
 
 	// 4. Optional pre-mutation snapshot & Git Worktree isolation for editable nodes.
@@ -690,7 +728,7 @@ func (s *TeamService) executeTeamNode(
 			base.Worktree = &finalWT
 		}
 		handoff := &workflow.NodeHandoff{Status: "blocked", Summary: reason, Blockers: []string{reason}}
-		return finishAndSubmit("blocked", "blocked", reason, handoff, realTouched, nil, OutcomeBlocked)
+		return finishAndSubmit("blocked", "blocked", reason, handoff, realTouched, nil, OutcomeBlocked, "runtime-error")
 	}
 
 	handoff := parseTeamNodeHandoff(turnRes, realTouched)
@@ -701,7 +739,7 @@ func (s *TeamService) executeTeamNode(
 		msg := fmt.Sprintf("read-only role %s unexpectedly touched file(s): %s", node.Role, strings.Join(filesTouched, ", "))
 		handoff.Status = "blocked"
 		handoff.Blockers = append(handoff.Blockers, msg)
-		return finishAndSubmit("blocked", "blocked", msg, handoff, filesTouched, nil, OutcomeBlocked)
+		return finishAndSubmit("blocked", "blocked", msg, handoff, filesTouched, nil, OutcomeBlocked, "ownership-gate")
 	}
 	if node.CanEditFiles && len(node.OwnedPathPrefixes) > 0 {
 		var violated []string
@@ -718,12 +756,14 @@ func (s *TeamService) executeTeamNode(
 				finalWT, _ := s.Worktree.Finalize(in.WorkspaceRoot, *wtHandle, "blocked", true, false)
 				base.Worktree = &finalWT
 			}
-			return finishAndSubmit("blocked", "blocked", msg, handoff, filesTouched, nil, OutcomeBlocked)
+			return finishAndSubmit("blocked", "blocked", msg, handoff, filesTouched, nil, OutcomeBlocked, "ownership-gate")
 		}
 	}
 
 	// Optional real verification command receipt check.
 	var receiptIDs []string
+	var failureClass string
+	submitStatus := handoff.Status
 	if handoff.Status == "pass" && node.VerifySpec != nil {
 		recExec := runner.ReceiptExecutor{
 			Sink: func(rctx context.Context, root string, rec runner.ReceiptRecord) (string, error) {
@@ -743,6 +783,7 @@ func (s *TeamService) executeTeamNode(
 					StderrSHA256:  rec.StderrSHA256,
 					OutputExcerpt: rec.OutputExcerpt,
 					ArtifactRef:   rec.ArtifactRef,
+					ExecError:     rec.ExecError,
 				})
 				if err != nil {
 					return "", err
@@ -751,9 +792,13 @@ func (s *TeamService) executeTeamNode(
 			},
 			Offload: s.offloadHook(),
 		}
+		verifyCwd := execCwd
+		if rel := strings.TrimSpace(node.VerifySpec.CwdRel); rel != "" {
+			verifyCwd = filepath.Join(execCwd, rel)
+		}
 		recOut, recErr := recExec.RunAndRecord(ctx, runner.ReceiptExecInput{
 			WorkspaceRoot: in.WorkspaceRoot,
-			ExecutionCwd:  execCwd,
+			ExecutionCwd:  verifyCwd,
 			WorkItemID:    in.WorkItemID,
 			NodeID:        node.ID,
 			RunID:         runID,
@@ -762,13 +807,28 @@ func (s *TeamService) executeTeamNode(
 			Args:          node.VerifySpec.Args,
 		})
 		if recErr != nil {
+			reason := fmt.Sprintf("verification command execution error: %v", recErr)
 			handoff.Status = "blocked"
-			handoff.Blockers = append(handoff.Blockers, recErr.Error())
+			handoff.Summary = reason
+			handoff.Blockers = append(handoff.Blockers, reason)
+			submitStatus = "blocked"
+			failureClass = "runtime-error"
 		} else {
 			receiptIDs = append(receiptIDs, recOut.ReceiptID)
-			if recOut.Record.ExitCode != node.VerifySpec.ExpectedExitCode {
+			if recOut.Record.ExecError != "" {
+				reason := "verification environment error: " + recOut.Record.ExecError
 				handoff.Status = "blocked"
-				handoff.Blockers = append(handoff.Blockers, fmt.Sprintf("verification failed (exit=%d)", recOut.Record.ExitCode))
+				handoff.Summary = reason
+				handoff.Blockers = append(handoff.Blockers, reason)
+				// Submit with status="pass" so SubmitNodeResult evaluates VerifyReceipt and blocks immediately without retry.
+				submitStatus = "pass"
+				failureClass = "environment-error"
+			} else if recOut.Record.ExitCode != node.VerifySpec.ExpectedExitCode {
+				reason := fmt.Sprintf("verification failed (exit=%d, expected=%d)", recOut.Record.ExitCode, node.VerifySpec.ExpectedExitCode)
+				handoff.Status = "blocked"
+				handoff.Summary = reason
+				handoff.Blockers = append(handoff.Blockers, reason)
+				submitStatus = "blocked"
 			}
 		}
 	}
@@ -783,7 +843,7 @@ func (s *TeamService) executeTeamNode(
 		finalWT, _ := s.Worktree.Finalize(in.WorkspaceRoot, *wtHandle, finalStatus, true, false)
 		base.Worktree = &finalWT
 	}
-	return finishAndSubmit(finalStatus, handoff.Status, handoff.Summary, handoff, filesTouched, receiptIDs, outcome)
+	return finishAndSubmit(finalStatus, submitStatus, handoff.Summary, handoff, filesTouched, receiptIDs, outcome, failureClass)
 }
 
 func (s *TeamService) offloadHook() runner.OffloadHook {
@@ -835,6 +895,10 @@ func buildTeamNodePrompt(node workflow.TaskNode, upstream []TeamNodeRun) string 
 	if len(node.OwnedPathPrefixes) > 0 {
 		fmt.Fprintf(&b, "- OwnedPathPrefixes: %s\n", strings.Join(node.OwnedPathPrefixes, ", "))
 	}
+	if node.VerifySpec != nil {
+		fmt.Fprintf(&b, "- Verification command (host will execute and verify receipt): `%s %s` (expected exit=%d)\n",
+			node.VerifySpec.Command, strings.Join(node.VerifySpec.Args, " "), node.VerifySpec.ExpectedExitCode)
+	}
 	if len(upstream) > 0 {
 		b.WriteString("\n### Upstream Handoffs\n")
 		for _, u := range upstream {
@@ -846,6 +910,7 @@ func buildTeamNodePrompt(node workflow.TaskNode, upstream []TeamNodeRun) string 
 		}
 	}
 	b.WriteString("\nReturn a single JSON handoff object with `status` (pass|blocked|needs-input|fail), `summary`, `findings`, `blockers`, `filesTouched`, `nextSteps`, and `evidenceRefs`.\n")
+	b.WriteString(evidenceRefsPromptRule + "\n")
 	return b.String()
 }
 

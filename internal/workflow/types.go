@@ -254,6 +254,7 @@ type ExecutionReceipt struct {
 	StderrSHA256  string   `json:"stderrSha256"`
 	OutputExcerpt string   `json:"outputExcerpt,omitempty"`
 	ArtifactRef   string   `json:"artifactRef,omitempty"`
+	ExecError     string   `json:"execError,omitempty"`
 	CreatedAt     string   `json:"createdAt"`
 }
 

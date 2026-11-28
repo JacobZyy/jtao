@@ -226,6 +226,7 @@ func newWorkCmd(app *App) *cobra.Command {
 						StderrSHA256:  rec.StderrSHA256,
 						OutputExcerpt: rec.OutputExcerpt,
 						ArtifactRef:   rec.ArtifactRef,
+						ExecError:     rec.ExecError,
 					})
 					if err != nil {
 						return "", err
@@ -245,6 +246,9 @@ func newWorkCmd(app *App) *cobra.Command {
 				return err
 			}
 			return app.printResult(cmd, out, func() string {
+				if out.Record.ExecError != "" {
+					return fmt.Sprintf("receipt=%s exit=%d duration=%dms error=%s", out.ReceiptID, out.Record.ExitCode, out.Record.DurationMs, out.Record.ExecError)
+				}
 				return fmt.Sprintf("receipt=%s exit=%d duration=%dms", out.ReceiptID, out.Record.ExitCode, out.Record.DurationMs)
 			})
 		},

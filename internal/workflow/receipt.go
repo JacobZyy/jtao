@@ -49,12 +49,12 @@ func (s *SQLiteService) RecordReceipt(ctx context.Context, workspaceRoot string,
 		INSERT INTO execution_receipts (
 			id, work_item_id, node_id, run_id, command, args_json, cwd,
 			exit_code, timed_out, duration_ms, stdout_sha256, stderr_sha256,
-			output_excerpt, artifact_ref, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			output_excerpt, artifact_ref, exec_error, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		r.ID, r.WorkItemID, r.NodeID, r.RunID, r.Command, marshalJSON(r.Args, "[]"), r.Cwd,
 		r.ExitCode, timedOutInt, r.DurationMs, r.StdoutSHA256, r.StderrSHA256,
-		r.OutputExcerpt, r.ArtifactRef, r.CreatedAt,
+		r.OutputExcerpt, r.ArtifactRef, r.ExecError, r.CreatedAt,
 	)
 	if err != nil {
 		return ExecutionReceipt{}, fmt.Errorf("insert execution_receipts: %w", err)
@@ -81,12 +81,12 @@ func (s *SQLiteService) GetReceipt(ctx context.Context, workspaceRoot, receiptID
 	err = db.QueryRowContext(ctx, `
 		SELECT id, work_item_id, node_id, run_id, command, args_json, cwd,
 		       exit_code, timed_out, duration_ms, stdout_sha256, stderr_sha256,
-		       output_excerpt, artifact_ref, created_at
+		       output_excerpt, artifact_ref, exec_error, created_at
 		FROM execution_receipts WHERE id = ?
 	`, strings.TrimSpace(receiptID)).Scan(
 		&r.ID, &r.WorkItemID, &r.NodeID, &r.RunID, &r.Command, &argsJSON, &r.Cwd,
 		&r.ExitCode, &timedOutInt, &r.DurationMs, &r.StdoutSHA256, &r.StderrSHA256,
-		&r.OutputExcerpt, &r.ArtifactRef, &r.CreatedAt,
+		&r.OutputExcerpt, &r.ArtifactRef, &r.ExecError, &r.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -127,6 +127,9 @@ func (s *SQLiteService) VerifyReceipt(ctx context.Context, workspaceRoot, receip
 	}
 	if !reflect.DeepEqual(expectedArgs, actualArgs) {
 		return ReceiptVerifyResult{OK: false, Reason: fmt.Sprintf("receipt args mismatch: expected %v, got %v", expectedArgs, actualArgs), Receipt: r}, nil
+	}
+	if strings.TrimSpace(r.ExecError) != "" {
+		return ReceiptVerifyResult{OK: false, Reason: strings.TrimSpace(r.ExecError), Receipt: r}, nil
 	}
 	if r.TimedOut {
 		return ReceiptVerifyResult{OK: false, Reason: "receipt command timed out", Receipt: r}, nil

@@ -23,6 +23,7 @@ type ProcessResult struct {
 	ExitCode      int
 	TimedOut      bool
 	Aborted       bool
+	StartFailed   bool
 	TreeAlive     bool
 	KillEscalated bool
 	ChildPID      int
@@ -71,9 +72,10 @@ func ExecProcessGroup(ctx context.Context, command string, args []string, cwd st
 
 	if err := cmd.Start(); err != nil {
 		return ProcessResult{
-			ExitCode:  -1,
-			ElapsedMs: time.Since(start).Milliseconds(),
-			Err:       fmt.Errorf("start %s: %w", command, err),
+			ExitCode:    -1,
+			StartFailed: true,
+			ElapsedMs:   time.Since(start).Milliseconds(),
+			Err:         fmt.Errorf("start %s: %w", command, err),
 		}
 	}
 

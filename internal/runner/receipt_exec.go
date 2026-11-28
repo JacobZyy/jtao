@@ -4,9 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -34,6 +38,7 @@ type ReceiptRecord struct {
 	StderrSHA256  string
 	OutputExcerpt string
 	ArtifactRef   string
+	ExecError     string
 }
 
 // ReceiptSink persists a ReceiptRecord and returns its canonical receipt ID ("receipt:...").
@@ -85,18 +90,46 @@ func (e ReceiptExecutor) RunAndRecord(ctx context.Context, in ReceiptExecInput) 
 		timeout = defaultReceiptTimeout
 	}
 
-	cmdName := in.Command
-	extraDir := ""
-	if !strings.ContainsRune(cmdName, filepath.Separator) {
-		if resolved, err := ResolveBinary(cmdName); err == nil {
-			cmdName = resolved
-			extraDir = filepath.Dir(resolved)
+	env := BuildAugmentedEnv(in.Env, "")
+	var procRes ProcessResult
+	var startErr error
+
+	if info, statErr := os.Stat(absCwd); statErr != nil {
+		startErr = &os.PathError{Op: "chdir", Path: absCwd, Err: statErr}
+		procRes = ProcessResult{ExitCode: -1, StartFailed: true, Err: startErr}
+	} else if !info.IsDir() {
+		startErr = &os.PathError{Op: "chdir", Path: absCwd, Err: syscall.ENOTDIR}
+		procRes = ProcessResult{ExitCode: -1, StartFailed: true, Err: startErr}
+	} else {
+		cmdName := in.Command
+		if !strings.ContainsRune(cmdName, filepath.Separator) {
+			resolved, resErr := ResolveBinaryInEnv(cmdName, env)
+			if resErr != nil {
+				startErr = resErr
+				procRes = ProcessResult{ExitCode: -1, StartFailed: true, Err: startErr}
+			} else {
+				cmdName = resolved
+				env = BuildAugmentedEnv(env, filepath.Dir(resolved))
+			}
+		}
+		if startErr == nil {
+			procRes = ExecProcessGroup(ctx, cmdName, in.Args, absCwd, env, timeout)
+			if procRes.StartFailed {
+				startErr = procRes.Err
+			}
 		}
 	}
-	env := BuildAugmentedEnv(in.Env, extraDir)
 
-	procRes := ExecProcessGroup(ctx, cmdName, in.Args, absCwd, env, timeout)
-	combined := strings.TrimSpace(procRes.Stdout + "\n" + procRes.Stderr)
+	execError := ""
+	stderr := procRes.Stderr
+	if procRes.StartFailed && startErr != nil {
+		execError = formatStartError(in.Command, absCwd, startErr)
+		if strings.TrimSpace(stderr) == "" {
+			stderr = execError
+			procRes.Stderr = stderr
+		}
+	}
+	combined := strings.TrimSpace(procRes.Stdout + "\n" + stderr)
 
 	artifactRef := ""
 	if e.Offload != nil && len(combined) >= defaultOffloadThreshold {
@@ -116,9 +149,10 @@ func (e ReceiptExecutor) RunAndRecord(ctx context.Context, in ReceiptExecInput) 
 		TimedOut:      procRes.TimedOut,
 		DurationMs:    procRes.ElapsedMs,
 		StdoutSHA256:  hashText(procRes.Stdout),
-		StderrSHA256:  hashText(procRes.Stderr),
+		StderrSHA256:  hashText(stderr),
 		OutputExcerpt: clipText(combined, 800),
 		ArtifactRef:   artifactRef,
+		ExecError:     execError,
 	}
 
 	receiptID := ""
@@ -134,6 +168,26 @@ func (e ReceiptExecutor) RunAndRecord(ctx context.Context, in ReceiptExecInput) 
 		Record:    rec,
 		Result:    procRes,
 	}, nil
+}
+
+func formatStartError(command, cwd string, err error) string {
+	if err == nil {
+		return ""
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) && pathErr.Op == "chdir" {
+		return fmt.Sprintf("verify command %q failed to start: working directory %q: %v", command, cwd, pathErr.Err)
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		return fmt.Sprintf("verify command %q not found in PATH", command)
+	}
+	if errors.Is(err, os.ErrPermission) {
+		return fmt.Sprintf("verify command %q permission denied: %v", command, err)
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Sprintf("verify command %q not found: %v", command, err)
+	}
+	return fmt.Sprintf("verify command %q failed to start: %v", command, err)
 }
 
 func hashText(s string) string {

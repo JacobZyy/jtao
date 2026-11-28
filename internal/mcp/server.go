@@ -559,8 +559,8 @@ func registerWorkflowTools(srv *mcp.Server, cfg Config) {
 			return nil, runner.ReceiptExecOutput{}, err
 		}
 		cwd := ws
-		if strings.TrimSpace(in.CwdRel) != "" {
-			cwd = ws + "/" + strings.TrimSpace(in.CwdRel)
+		if rel := strings.TrimSpace(in.CwdRel); rel != "" {
+			cwd = filepath.Join(ws, rel)
 		}
 		exec := runner.ReceiptExecutor{
 			Sink: func(rctx context.Context, root string, rec runner.ReceiptRecord) (string, error) {
@@ -578,6 +578,7 @@ func registerWorkflowTools(srv *mcp.Server, cfg Config) {
 					StderrSHA256:  rec.StderrSHA256,
 					OutputExcerpt: rec.OutputExcerpt,
 					ArtifactRef:   rec.ArtifactRef,
+					ExecError:     rec.ExecError,
 				})
 				if err != nil {
 					return "", err
